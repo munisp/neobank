@@ -1,0 +1,213 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neobank
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: banking-service-config
+  namespace: neobank
+data:
+  SERVER_PORT: "8081"
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "neobank"
+  TIGERBEETLE_ADDRESS: "tigerbeetle-service:3000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: banking-service-secrets
+  namespace: neobank
+type: Opaque
+stringData:
+  DB_PASSWORD: "change-me-in-production"
+  JWT_SECRET: "change-me-in-production-use-strong-secret"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: banking-service
+  namespace: neobank
+  labels:
+    app: banking-service
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: banking-service
+  template:
+    metadata:
+      labels:
+        app: banking-service
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: "/metrics"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - banking-service
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: banking-service
+          image: neobank/banking-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+              name: http
+          envFrom:
+            - configMapRef:
+                name: banking-service-config
+            - secretRef:
+                name: banking-service-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: banking-service
+  namespace: neobank
+  labels:
+    app: banking-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+      name: http
+  selector:
+    app: banking-service
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: banking-service-hpa
+  namespace: neobank
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: banking-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: banking-service-pdb
+  namespace: neobank
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: banking-service
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: banking-service-ingress
+  namespace: neobank
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts:
+        - banking-api.neobank.ng
+      secretName: banking-service-tls
+  rules:
+    - host: banking-api.neobank.ng
+      http:
+        paths:
+          - path: /api/loans
+            pathType: Prefix
+            backend:
+              service:
+                name: banking-service
+                port:
+                  number: 8081
+          - path: /api/cards
+            pathType: Prefix
+            backend:
+              service:
+                name: banking-service
+                port:
+                  number: 8081
+          - path: /api/compliance
+            pathType: Prefix
+            backend:
+              service:
+                name: banking-service
+                port:
+                  number: 8081
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: banking-service-monitor
+  namespace: neobank
+  labels:
+    app: banking-service
+spec:
+  selector:
+    matchLabels:
+      app: banking-service
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /metrics
