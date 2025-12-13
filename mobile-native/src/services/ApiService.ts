@@ -883,6 +883,147 @@ class ApiService {
     const response = await this.client.delete(`/bills/scheduled/${paymentId}`);
     return response.data;
   }
+
+  // ===== KYC/KYB APIs (Multi-Country Support) =====
+
+  async getSupportedCountries() {
+    const response = await this.client.get('/kyc/countries');
+    return response.data;
+  }
+
+  async getCountryRequirements(countryCode: string) {
+    const response = await this.client.get(`/kyc/countries/${countryCode}/requirements`);
+    return response.data;
+  }
+
+  async verifyCountryDocument(countryCode: string, data: { document_type: string; document_number: string; additional_data?: any }) {
+    const response = await this.client.post(`/kyc/countries/${countryCode}/verify`, data);
+    return response.data;
+  }
+
+  async verifyNigeriaBVN(data: { bvn: string; first_name: string; last_name: string; date_of_birth: string }) {
+    const response = await this.client.post('/kyc/nigeria/bvn/verify', data);
+    return response.data;
+  }
+
+  async verifyNigeriaNIN(data: { nin: string; first_name: string; last_name: string }) {
+    const response = await this.client.post('/kyc/nigeria/nin/verify', data);
+    return response.data;
+  }
+
+  async verifySouthAfricaID(data: { id_number: string; first_name: string; last_name: string }) {
+    const response = await this.client.post('/kyc/south-africa/id/verify', data);
+    return response.data;
+  }
+
+  async verifyKenyaID(data: { id_number: string; first_name: string; last_name: string }) {
+    const response = await this.client.post('/kyc/kenya/id/verify', data);
+    return response.data;
+  }
+
+  async verifyGhanaCard(data: { card_number: string; first_name: string; last_name: string }) {
+    const response = await this.client.post('/kyc/ghana/card/verify', data);
+    return response.data;
+  }
+
+  async verifyEgyptNationalID(data: { id_number: string; first_name: string; last_name: string }) {
+    const response = await this.client.post('/kyc/egypt/id/verify', data);
+    return response.data;
+  }
+
+  async initiateKYC(data: { country_code: string; tier: string }) {
+    const response = await this.client.post('/kyc/initiate', data);
+    return response.data;
+  }
+
+  async getKYCApplications() {
+    const response = await this.client.get('/kyc/applications');
+    return response.data;
+  }
+
+  async getKYCApplication(applicationId: string) {
+    const response = await this.client.get(`/kyc/applications/${applicationId}`);
+    return response.data;
+  }
+
+  async submitPersonalInfo(applicationId: string, data: { first_name: string; last_name: string; date_of_birth: string; nationality: string; phone: string; email: string }) {
+    const response = await this.client.post(`/kyc/applications/${applicationId}/personal-info`, data);
+    return response.data;
+  }
+
+  async submitAddressInfo(applicationId: string, data: { street: string; city: string; state: string; postal_code: string; country: string }) {
+    const response = await this.client.post(`/kyc/applications/${applicationId}/address`, data);
+    return response.data;
+  }
+
+  async submitIdentityVerification(applicationId: string, data: { document_type: string; document_number: string; expiry_date?: string }) {
+    const response = await this.client.post(`/kyc/applications/${applicationId}/identity`, data);
+    return response.data;
+  }
+
+  async uploadKYCDocument(applicationId: string, file: any, documentType: string) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('document_type', documentType);
+    const response = await this.client.post(`/kyc/applications/${applicationId}/documents`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getKYCDocuments(applicationId: string) {
+    const response = await this.client.get(`/kyc/applications/${applicationId}/documents`);
+    return response.data;
+  }
+
+  async submitBiometric(applicationId: string, data: { selfie_image: string; liveness_check?: boolean }) {
+    const response = await this.client.post(`/kyc/applications/${applicationId}/biometric`, data);
+    return response.data;
+  }
+
+  async submitKYCForReview(applicationId: string) {
+    const response = await this.client.post(`/kyc/applications/${applicationId}/submit`);
+    return response.data;
+  }
+
+  async getAMLScreening(applicationId: string) {
+    const response = await this.client.get(`/kyc/applications/${applicationId}/aml-screening`);
+    return response.data;
+  }
+
+  async upgradeKYCTier(applicationId: string, data: { target_tier: string }) {
+    const response = await this.client.post(`/kyc/applications/${applicationId}/upgrade`, data);
+    return response.data;
+  }
+
+  // ===== Stablecoin Stock Purchase APIs =====
+
+  async getStablecoinBalances() {
+    const response = await this.client.get('/investment/stablecoin/balances');
+    return response.data;
+  }
+
+  async buyStockWithStablecoin(data: { 
+    exchange: string; 
+    symbol: string; 
+    shares: number; 
+    stablecoin: string; 
+    order_type: string;
+    limit_price?: number;
+  }) {
+    const response = await this.client.post('/investment/stocks/buy-with-stablecoin', data);
+    return response.data;
+  }
+
+  async getFXRate(fromCurrency: string, toCurrency: string) {
+    const response = await this.client.get(`/fx/rate/${fromCurrency}/${toCurrency}`);
+    return response.data;
+  }
+
+  async getSupportedCurrencies() {
+    const response = await this.client.get('/fx/currencies');
+    return response.data;
+  }
 }
 
 export default new ApiService();
