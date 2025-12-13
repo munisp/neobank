@@ -1,0 +1,215 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kyc-kyb-service
+  namespace: neobank
+  labels:
+    app: kyc-kyb-service
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kyc-kyb-service
+  template:
+    metadata:
+      labels:
+        app: kyc-kyb-service
+        version: v1
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: kyc-kyb-service
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: kyc-kyb-service
+          image: neobank/kyc-kyb-service:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: SERVER_PORT
+              value: "8080"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: db-host
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: db-user
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: db-password
+            - name: DB_NAME
+              value: neobank_kyc
+            - name: REDIS_HOST
+              value: redis-cluster.neobank.svc.cluster.local
+            - name: REDIS_PORT
+              value: "6379"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: jwt-secret
+            - name: COMPLYADVANTAGE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: complyadvantage-api-key
+            - name: SANCTIONS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: sanctions-api-key
+            - name: BIOMETRIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: biometric-api-key
+            - name: CAC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kyc-kyb-secrets
+                  key: cac-api-key
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: uploads
+              mountPath: /var/uploads/kyc
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: kyc-uploads-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kyc-kyb-service
+  namespace: neobank
+  labels:
+    app: kyc-kyb-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: kyc-kyb-service
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: kyc-kyb-service-hpa
+  namespace: neobank
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: kyc-kyb-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kyc-kyb-service-pdb
+  namespace: neobank
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: kyc-kyb-service
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kyc-uploads-pvc
+  namespace: neobank
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kyc-kyb-service-ingress
+  namespace: neobank
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  tls:
+    - hosts:
+        - kyc-api.neobank.com
+      secretName: kyc-tls-secret
+  rules:
+    - host: kyc-api.neobank.com
+      http:
+        paths:
+          - path: /api/kyc
+            pathType: Prefix
+            backend:
+              service:
+                name: kyc-kyb-service
+                port:
+                  number: 80
+          - path: /api/kyb
+            pathType: Prefix
+            backend:
+              service:
+                name: kyc-kyb-service
+                port:
+                  number: 80
