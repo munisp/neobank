@@ -45,6 +45,26 @@ type ComplianceConfig struct {
 	BiometricURL            string
 	CACVerificationAPIKey   string
 	CACVerificationURL      string
+	// Nigeria-specific API keys
+	NigeriaBVNAPIKey        string
+	NigeriaNINAPIKey        string
+	NigeriaCACAPIKey        string
+	// South Africa-specific API keys
+	SouthAfricaCIPCAPIKey   string
+	SouthAfricaIDAPIKey     string
+	// Kenya-specific API keys
+	KenyaIPRSAPIKey         string
+	KenyaKRAAPIKey          string
+	// Ghana-specific API keys
+	GhanaGRAAPIKey          string
+	GhanaCardAPIKey         string
+	// Egypt-specific API keys
+	EgyptNIDAPIKey          string
+	// Morocco-specific API keys
+	MoroccoOMPICAPIKey      string
+	// Uganda-specific API keys
+	UgandaURSBAPIKey        string
+	UgandaNINAPIKey         string
 }
 
 type JWTConfig struct {
@@ -88,6 +108,26 @@ func Load() *Config {
 			BiometricURL:          getEnv("BIOMETRIC_URL", "https://api.biometric-verify.com/v1"),
 			CACVerificationAPIKey: getEnv("CAC_API_KEY", ""),
 			CACVerificationURL:    getEnv("CAC_URL", "https://api.cac.gov.ng/v1"),
+			// Nigeria-specific API keys
+			NigeriaBVNAPIKey:      getEnv("NIGERIA_BVN_API_KEY", ""),
+			NigeriaNINAPIKey:      getEnv("NIGERIA_NIN_API_KEY", ""),
+			NigeriaCACAPIKey:      getEnv("NIGERIA_CAC_API_KEY", ""),
+			// South Africa-specific API keys
+			SouthAfricaCIPCAPIKey: getEnv("SOUTH_AFRICA_CIPC_API_KEY", ""),
+			SouthAfricaIDAPIKey:   getEnv("SOUTH_AFRICA_ID_API_KEY", ""),
+			// Kenya-specific API keys
+			KenyaIPRSAPIKey:       getEnv("KENYA_IPRS_API_KEY", ""),
+			KenyaKRAAPIKey:        getEnv("KENYA_KRA_API_KEY", ""),
+			// Ghana-specific API keys
+			GhanaGRAAPIKey:        getEnv("GHANA_GRA_API_KEY", ""),
+			GhanaCardAPIKey:       getEnv("GHANA_CARD_API_KEY", ""),
+			// Egypt-specific API keys
+			EgyptNIDAPIKey:        getEnv("EGYPT_NID_API_KEY", ""),
+			// Morocco-specific API keys
+			MoroccoOMPICAPIKey:    getEnv("MOROCCO_OMPIC_API_KEY", ""),
+			// Uganda-specific API keys
+			UgandaURSBAPIKey:      getEnv("UGANDA_URSB_API_KEY", ""),
+			UgandaNINAPIKey:       getEnv("UGANDA_NIN_API_KEY", ""),
 		},
 		JWT: JWTConfig{
 			Secret:     getEnv("JWT_SECRET", ""),

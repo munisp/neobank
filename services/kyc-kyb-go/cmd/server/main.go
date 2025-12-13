@@ -65,6 +65,19 @@ func main() {
 			kyc.POST("/applications/:id/submit", kycHandler.SubmitForReview)
 			kyc.GET("/applications/:id/aml-screening", kycHandler.GetAMLScreening)
 			kyc.POST("/applications/:id/upgrade", kycHandler.UpgradeTier)
+
+			// Multi-country verification routes
+			kyc.GET("/countries", kycHandler.GetSupportedCountries)
+			kyc.GET("/countries/:code/requirements", kycHandler.GetCountryRequirements)
+			kyc.POST("/countries/:code/verify", kycHandler.VerifyCountryDocument)
+
+			// Country-specific verification endpoints
+			kyc.POST("/nigeria/bvn/verify", kycHandler.VerifyNigeriaBVN)
+			kyc.POST("/nigeria/nin/verify", kycHandler.VerifyNigeriaNIN)
+			kyc.POST("/south-africa/id/verify", kycHandler.VerifySouthAfricaID)
+			kyc.POST("/kenya/id/verify", kycHandler.VerifyKenyaID)
+			kyc.POST("/ghana/card/verify", kycHandler.VerifyGhanaCard)
+			kyc.POST("/egypt/id/verify", kycHandler.VerifyEgyptNationalID)
 		}
 
 		// KYB routes

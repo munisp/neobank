@@ -19,10 +19,11 @@ import (
 
 // KYCHandler handles KYC-related HTTP requests
 type KYCHandler struct {
-	db          *database.InMemoryDB
-	cfg         *config.Config
-	amlService  *compliance.AMLService
-	riskService *compliance.RiskScoringService
+	db                     *database.InMemoryDB
+	cfg                    *config.Config
+	amlService             *compliance.AMLService
+	riskService            *compliance.RiskScoringService
+	countryVerifyService   *compliance.CountryVerificationService
 }
 
 // NewKYCHandler creates a new KYC handler
@@ -32,11 +33,20 @@ func NewKYCHandler(db *database.InMemoryDB, cfg *config.Config) *KYCHandler {
 		amlService, _ = compliance.NewAMLService(&cfg.Compliance)
 	}
 
+	// Initialize country verification service with config
+	countryVerifyConfig := &compliance.CountryVerificationConfig{
+		NigeriaBVNAPIKey:   cfg.Compliance.NigeriaBVNAPIKey,
+		NigeriaNINAPIKey:   cfg.Compliance.NigeriaNINAPIKey,
+		NigeriaCACAPIKey:   cfg.Compliance.NigeriaCACAPIKey,
+	}
+	countryVerifyService := compliance.NewCountryVerificationService(countryVerifyConfig)
+
 	return &KYCHandler{
-		db:          db,
-		cfg:         cfg,
-		amlService:  amlService,
-		riskService: compliance.NewRiskScoringService(),
+		db:                   db,
+		cfg:                  cfg,
+		amlService:           amlService,
+		riskService:          compliance.NewRiskScoringService(),
+		countryVerifyService: countryVerifyService,
 	}
 }
 
@@ -626,4 +636,270 @@ func isValidTierUpgrade(current, new models.KYCTier) bool {
 		models.KYCTierPremium:  3,
 	}
 	return tierOrder[new] > tierOrder[current]
+}
+
+// GetSupportedCountries returns list of supported countries for KYC
+// GET /kyc/countries
+func (h *KYCHandler) GetSupportedCountries(c *gin.Context) {
+	countries := h.countryVerifyService.GetSupportedCountries()
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"countries": countries,
+		"total":     len(countries),
+	})
+}
+
+// GetCountryRequirements returns KYC requirements for a specific country
+// GET /kyc/countries/:code/requirements
+func (h *KYCHandler) GetCountryRequirements(c *gin.Context) {
+	countryCode := c.Param("code")
+	requirements := h.countryVerifyService.GetCountryDocumentRequirements(countryCode)
+	if requirements == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Country not supported"})
+		return
+	}
+
+	verificationTypes := h.countryVerifyService.GetVerificationTypes(countryCode)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":            true,
+		"country":            requirements.Country,
+		"country_code":       requirements.CountryCode,
+		"basic_tier_docs":    requirements.BasicTierDocs,
+		"enhanced_tier_docs": requirements.EnhancedTierDocs,
+		"premium_tier_docs":  requirements.PremiumTierDocs,
+		"national_id_types":  requirements.NationalIDTypes,
+		"business_reg_types": requirements.BusinessRegTypes,
+		"tax_id_types":       requirements.TaxIDTypes,
+		"verification_types": verificationTypes,
+	})
+}
+
+// VerifyCountryDocument verifies a country-specific document
+// POST /kyc/countries/:code/verify
+func (h *KYCHandler) VerifyCountryDocument(c *gin.Context) {
+	countryCode := c.Param("code")
+
+	var req struct {
+		DocumentType   string            `json:"document_type" binding:"required"`
+		DocumentNumber string            `json:"document_number" binding:"required"`
+		AdditionalData map[string]string `json:"additional_data"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.countryVerifyService.VerifyDocument(
+		c.Request.Context(),
+		countryCode,
+		req.DocumentType,
+		req.DocumentNumber,
+		req.AdditionalData,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
+}
+
+// VerifyNigeriaBVN verifies a Nigerian BVN
+// POST /kyc/nigeria/bvn/verify
+func (h *KYCHandler) VerifyNigeriaBVN(c *gin.Context) {
+	var req struct {
+		BVN         string `json:"bvn" binding:"required,len=11"`
+		FirstName   string `json:"first_name" binding:"required"`
+		LastName    string `json:"last_name" binding:"required"`
+		DateOfBirth string `json:"date_of_birth" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.countryVerifyService.VerifyNigeriaBVN(
+		c.Request.Context(),
+		req.BVN,
+		req.FirstName,
+		req.LastName,
+		req.DateOfBirth,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
+}
+
+// VerifyNigeriaNIN verifies a Nigerian NIN
+// POST /kyc/nigeria/nin/verify
+func (h *KYCHandler) VerifyNigeriaNIN(c *gin.Context) {
+	var req struct {
+		NIN       string `json:"nin" binding:"required,len=11"`
+		FirstName string `json:"first_name" binding:"required"`
+		LastName  string `json:"last_name" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.countryVerifyService.VerifyNigeriaNIN(
+		c.Request.Context(),
+		req.NIN,
+		req.FirstName,
+		req.LastName,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
+}
+
+// VerifySouthAfricaID verifies a South African ID
+// POST /kyc/south-africa/id/verify
+func (h *KYCHandler) VerifySouthAfricaID(c *gin.Context) {
+	var req struct {
+		IDNumber  string `json:"id_number" binding:"required,len=13"`
+		FirstName string `json:"first_name" binding:"required"`
+		LastName  string `json:"last_name" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.countryVerifyService.VerifySouthAfricaID(
+		c.Request.Context(),
+		req.IDNumber,
+		req.FirstName,
+		req.LastName,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
+}
+
+// VerifyKenyaID verifies a Kenyan National ID
+// POST /kyc/kenya/id/verify
+func (h *KYCHandler) VerifyKenyaID(c *gin.Context) {
+	var req struct {
+		IDNumber  string `json:"id_number" binding:"required"`
+		FirstName string `json:"first_name" binding:"required"`
+		LastName  string `json:"last_name" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.countryVerifyService.VerifyKenyaID(
+		c.Request.Context(),
+		req.IDNumber,
+		req.FirstName,
+		req.LastName,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
+}
+
+// VerifyGhanaCard verifies a Ghana Card
+// POST /kyc/ghana/card/verify
+func (h *KYCHandler) VerifyGhanaCard(c *gin.Context) {
+	var req struct {
+		CardNumber string `json:"card_number" binding:"required"`
+		FirstName  string `json:"first_name" binding:"required"`
+		LastName   string `json:"last_name" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.countryVerifyService.VerifyGhanaCard(
+		c.Request.Context(),
+		req.CardNumber,
+		req.FirstName,
+		req.LastName,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
+}
+
+// VerifyEgyptNationalID verifies an Egyptian National ID
+// POST /kyc/egypt/id/verify
+func (h *KYCHandler) VerifyEgyptNationalID(c *gin.Context) {
+	var req struct {
+		IDNumber  string `json:"id_number" binding:"required,len=14"`
+		FirstName string `json:"first_name" binding:"required"`
+		LastName  string `json:"last_name" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.countryVerifyService.VerifyEgyptNationalID(
+		c.Request.Context(),
+		req.IDNumber,
+		req.FirstName,
+		req.LastName,
+	)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"result":  result,
+	})
 }

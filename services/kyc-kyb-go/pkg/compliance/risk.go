@@ -400,19 +400,48 @@ func loadIndustryRiskMapping() map[string]float64 {
 
 func loadCountryRiskScores() map[string]float64 {
 	return map[string]float64{
-		"NG": 30.0, // Nigeria
+		// African Countries (Primary Markets)
+		"NG": 30.0,  // Nigeria
+		"ZA": 30.0,  // South Africa
+		"KE": 35.0,  // Kenya
+		"GH": 35.0,  // Ghana
+		"EG": 35.0,  // Egypt
+		"MA": 30.0,  // Morocco
+		"UG": 40.0,  // Uganda
+		"TZ": 40.0,  // Tanzania
+		"ZW": 50.0,  // Zimbabwe
+		"BW": 25.0,  // Botswana
+		"ZM": 40.0,  // Zambia
+		"RW": 30.0,  // Rwanda
+		"ET": 45.0,  // Ethiopia
+		"SN": 35.0,  // Senegal
+		"CI": 40.0,  // Cote d'Ivoire
+		"CM": 45.0,  // Cameroon
+		"AO": 50.0,  // Angola
+		"MZ": 45.0,  // Mozambique
+		"NA": 25.0,  // Namibia
+		"MU": 20.0,  // Mauritius
+		// Major International Markets
 		"US": 15.0,
 		"GB": 15.0,
 		"DE": 15.0,
 		"FR": 15.0,
-		"GH": 35.0, // Ghana
-		"KE": 35.0, // Kenya
-		"ZA": 30.0, // South Africa
-		"AE": 40.0, // UAE
-		"CN": 45.0, // China
-		"RU": 80.0, // Russia
-		"IR": 95.0, // Iran
+		"NL": 15.0,
+		"CH": 10.0,
+		"SG": 15.0,
+		"HK": 20.0,
+		"JP": 15.0,
+		"AU": 15.0,
+		"CA": 15.0,
+		// Higher Risk Jurisdictions
+		"AE": 40.0,  // UAE
+		"CN": 45.0,  // China
+		"RU": 80.0,  // Russia
+		"IR": 95.0,  // Iran
 		"KP": 100.0, // North Korea
+		"SY": 95.0,  // Syria
+		"VE": 70.0,  // Venezuela
+		"MM": 75.0,  // Myanmar
 	}
 }
 
