@@ -549,6 +549,184 @@ function App() {
           </div>
         )
       },
+    escrow: {
+      title: 'Escrow',
+      icon: '🔒',
+      content: (
+        <div className="space-y-4">
+          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 rounded-xl">
+            <p className="text-sm opacity-80">Protected Transactions</p>
+            <h2 className="text-2xl font-bold">₦3,250,000</h2>
+            <p className="text-sm mt-1">5 Active Escrows</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button className="bg-white p-4 rounded-lg shadow text-center hover:bg-gray-50">
+              <span className="text-2xl">🛒</span>
+              <p className="text-sm font-medium mt-1">P2P Trade</p>
+              <p className="text-xs text-gray-500">Buy/Sell safely</p>
+            </button>
+            <button className="bg-white p-4 rounded-lg shadow text-center hover:bg-gray-50">
+              <span className="text-2xl">🏠</span>
+              <p className="text-sm font-medium mt-1">Real Estate</p>
+              <p className="text-xs text-gray-500">Property deals</p>
+            </button>
+            <button className="bg-white p-4 rounded-lg shadow text-center hover:bg-gray-50">
+              <span className="text-2xl">🚗</span>
+              <p className="text-sm font-medium mt-1">Vehicle</p>
+              <p className="text-xs text-gray-500">Car transactions</p>
+            </button>
+            <button className="bg-white p-4 rounded-lg shadow text-center hover:bg-gray-50">
+              <span className="text-2xl">💼</span>
+              <p className="text-sm font-medium mt-1">Freelance</p>
+              <p className="text-xs text-gray-500">Milestone payments</p>
+            </button>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <h4 className="font-semibold mb-3">Active Escrows</h4>
+            <div className="space-y-3">
+              {[
+                { id: 'ESC-A1B2C3', title: 'iPhone 15 Pro Max', amount: '₦850,000', status: 'funded', type: 'P2P', role: 'Buyer', counterparty: 'John D.' },
+                { id: 'ESC-D4E5F6', title: 'Web Development Project', amount: '₦1,200,000', status: 'in_progress', type: 'Milestone', role: 'Buyer', counterparty: 'DevStudio' },
+                { id: 'ESC-G7H8I9', title: 'Toyota Camry 2020', amount: '₦8,500,000', status: 'inspection', type: 'Vehicle', role: 'Buyer', counterparty: 'AutoDealer' },
+              ].map((escrow, i) => (
+                <div key={i} className="border rounded-lg p-3">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <p className="font-medium">{escrow.title}</p>
+                      <p className="text-xs text-gray-500">{escrow.id} - {escrow.type}</p>
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded-full ${
+                      escrow.status === 'funded' ? 'bg-blue-100 text-blue-600' :
+                      escrow.status === 'in_progress' ? 'bg-yellow-100 text-yellow-600' :
+                      escrow.status === 'inspection' ? 'bg-purple-100 text-purple-600' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {escrow.status.replace('_', ' ')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-sm text-gray-500">{escrow.role} - {escrow.counterparty}</p>
+                    </div>
+                    <p className="font-semibold text-green-600">{escrow.amount}</p>
+                  </div>
+                  <div className="flex gap-2 mt-2">
+                    {escrow.status === 'inspection' && (
+                      <>
+                        <button className="flex-1 bg-green-500 text-white py-1 rounded text-xs">Approve</button>
+                        <button className="flex-1 bg-red-500 text-white py-1 rounded text-xs">Dispute</button>
+                      </>
+                    )}
+                    {escrow.status === 'funded' && (
+                      <button className="flex-1 bg-blue-500 text-white py-1 rounded text-xs">View Details</button>
+                    )}
+                    {escrow.status === 'in_progress' && (
+                      <button className="flex-1 bg-yellow-500 text-white py-1 rounded text-xs">Track Progress</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <h4 className="font-semibold mb-3">Create New Escrow</h4>
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm text-gray-500">Transaction Type</label>
+                <select className="w-full p-2 border rounded-lg mt-1">
+                  <option>P2P Marketplace</option>
+                  <option>Real Estate</option>
+                  <option>Vehicle Sale</option>
+                  <option>Freelance/Service</option>
+                  <option>Milestone Project</option>
+                  <option>General Trade</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm text-gray-500">Amount</label>
+                <input type="text" placeholder="Enter amount" className="w-full p-2 border rounded-lg mt-1" />
+              </div>
+              <div>
+                <label className="text-sm text-gray-500">Counterparty Email/Phone</label>
+                <input type="text" placeholder="Enter email or phone" className="w-full p-2 border rounded-lg mt-1" />
+              </div>
+              <div>
+                <label className="text-sm text-gray-500">Description</label>
+                <textarea placeholder="Describe the transaction" className="w-full p-2 border rounded-lg mt-1" rows="2"></textarea>
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" id="insurance" className="rounded" />
+                <label htmlFor="insurance" className="text-sm">Add transaction insurance (+1%)</label>
+              </div>
+              <button className="w-full bg-indigo-500 text-white py-3 rounded-lg font-medium">
+                Create Escrow
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <h4 className="font-semibold mb-2">Escrow Stats</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-green-50 p-3 rounded-lg">
+                <p className="text-xs text-gray-500">Completed</p>
+                <p className="text-xl font-bold text-green-600">23</p>
+              </div>
+              <div className="bg-blue-50 p-3 rounded-lg">
+                <p className="text-xs text-gray-500">Active</p>
+                <p className="text-xl font-bold text-blue-600">5</p>
+              </div>
+              <div className="bg-yellow-50 p-3 rounded-lg">
+                <p className="text-xs text-gray-500">Disputed</p>
+                <p className="text-xl font-bold text-yellow-600">1</p>
+              </div>
+              <div className="bg-purple-50 p-3 rounded-lg">
+                <p className="text-xs text-gray-500">Total Volume</p>
+                <p className="text-xl font-bold text-purple-600">₦45M</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-indigo-50 p-4 rounded-lg">
+            <h4 className="font-semibold">How Escrow Works</h4>
+            <div className="mt-2 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 bg-indigo-500 text-white rounded-full flex items-center justify-center text-xs">1</span>
+                <p className="text-sm">Buyer and seller agree on terms</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 bg-indigo-500 text-white rounded-full flex items-center justify-center text-xs">2</span>
+                <p className="text-sm">Buyer funds the escrow</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 bg-indigo-500 text-white rounded-full flex items-center justify-center text-xs">3</span>
+                <p className="text-sm">Seller delivers goods/services</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 bg-indigo-500 text-white rounded-full flex items-center justify-center text-xs">4</span>
+                <p className="text-sm">Buyer inspects and approves</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 bg-indigo-500 text-white rounded-full flex items-center justify-center text-xs">5</span>
+                <p className="text-sm">Funds released to seller</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <h4 className="font-semibold mb-2">Dispute Resolution</h4>
+            <p className="text-sm text-gray-600">Our arbitration team resolves disputes within 48-72 hours with evidence-based decisions.</p>
+            <div className="mt-2 flex gap-2">
+              <span className="text-xs bg-gray-100 px-2 py-1 rounded">Evidence Upload</span>
+              <span className="text-xs bg-gray-100 px-2 py-1 rounded">Mediation</span>
+              <span className="text-xs bg-gray-100 px-2 py-1 rounded">Fair Split</span>
+            </div>
+          </div>
+        </div>
+      )
+    },
     }
 
   const tabs = Object.keys(features)

@@ -198,6 +198,7 @@ def create_application() -> FastAPI:
         analytics_router,
         bill_payment_router,
         telecom_router,
+        escrow_router,
     )
     
     # Investment & Trading (African exchanges: NGX, JSE, NSE, etc.)
@@ -236,6 +237,10 @@ def create_application() -> FastAPI:
     # Telecom (Airtime, Data, eSIM)
     app.include_router(telecom_router.router, prefix="/api/v1", tags=["Telecom"])
     app.include_router(telecom_router.router, prefix="/api", tags=["Telecom"])
+    
+    # Escrow (P2P, Marketplace, Real Estate, Vehicle, Service, Milestone)
+    app.include_router(escrow_router.router, prefix="/api/v1", tags=["Escrow"])
+    app.include_router(escrow_router.router, prefix="/api", tags=["Escrow"])
     
     return app
 
