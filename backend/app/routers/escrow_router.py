@@ -17,6 +17,12 @@ import os
 import structlog
 
 from app.services.escrow_account_service import escrow_account_service
+from app.services.multiparty_escrow_service import (
+    multiparty_escrow_service,
+    PartyRole,
+    PartyStatus,
+    ApprovalType
+)
 
 logger = structlog.get_logger()
 
@@ -646,3 +652,247 @@ async def resolve_dispute(dispute_id: str, request: ResolveDisputeRequest):
         **go_result,
         "account_transaction": resolve_result
     }
+
+
+# ============================================================================
+# MULTIPARTY ESCROW ENDPOINTS
+# ============================================================================
+
+class PartyInput(BaseModel):
+    user_id: str
+    contribution_percentage: Optional[float] = None  # For buyers
+    distribution_percentage: Optional[float] = None  # For sellers
+    account_id: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    approval_weight: Optional[float] = 1.0
+
+
+class ApprovalConfigInput(BaseModel):
+    approval_type: str = "all"  # all, majority, threshold, any, weighted
+    required_approvals: Optional[int] = None
+    weight_threshold: Optional[float] = 0.5
+    approver_roles: Optional[List[str]] = None
+    approval_deadline: Optional[datetime] = None
+
+
+class CreateMultipartyEscrowRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    total_amount: float = Field(..., gt=0)
+    currency: str = "NGN"
+    buyers: List[PartyInput]
+    sellers: List[PartyInput]
+    approval_config: Optional[ApprovalConfigInput] = None
+    agent_id: Optional[str] = None
+    trustee_id: Optional[str] = None
+    escrow_type: str = "general"
+    inspection_days: int = 3
+    auto_release: bool = False
+
+
+class AddPartyRequest(BaseModel):
+    user_id: str
+    role: str  # buyer, seller, broker, agent, trustee, witness, guarantor, inspector, lawyer
+    contribution_percentage: Optional[float] = 0
+    distribution_percentage: Optional[float] = 0
+    account_id: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    approval_weight: Optional[float] = 1.0
+
+
+class RemovePartyRequest(BaseModel):
+    removed_by: str
+    reason: Optional[str] = None
+
+
+class FundContributionRequest(BaseModel):
+    party_id: str
+    amount: float
+    account_id: str
+    transaction_id: Optional[str] = None
+
+
+class PartyApprovalRequest(BaseModel):
+    party_id: str
+
+
+class DistributeToSellersRequest(BaseModel):
+    total_amount: float
+    fee_percentage: Optional[float] = 2.5
+
+
+@router.post("/multiparty")
+async def create_multiparty_escrow(request: CreateMultipartyEscrowRequest):
+    """
+    Create a new multiparty escrow transaction.
+    
+    Supports:
+    - Multiple buyers with contribution percentages (must sum to 100%)
+    - Multiple sellers with distribution percentages (must sum to 100%)
+    - Configurable approval workflows (all, majority, threshold, any, weighted)
+    - Optional agent and trustee assignment
+    """
+    try:
+        approval_config = None
+        if request.approval_config:
+            approval_config = {
+                "approval_type": request.approval_config.approval_type,
+                "required_approvals": request.approval_config.required_approvals,
+                "weight_threshold": request.approval_config.weight_threshold,
+                "approver_roles": request.approval_config.approver_roles,
+                "approval_deadline": request.approval_config.approval_deadline
+            }
+        
+        result = await multiparty_escrow_service.create_multiparty_escrow(
+            title=request.title,
+            description=request.description,
+            total_amount=Decimal(str(request.total_amount)),
+            currency=request.currency,
+            buyers=[b.dict() for b in request.buyers],
+            sellers=[s.dict() for s in request.sellers],
+            approval_config=approval_config,
+            agent_id=request.agent_id,
+            trustee_id=request.trustee_id,
+            escrow_type=request.escrow_type,
+            inspection_days=request.inspection_days,
+            auto_release=request.auto_release
+        )
+        
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{escrow_id}/parties")
+async def add_party_to_escrow(escrow_id: str, request: AddPartyRequest):
+    """Add a new party to an existing escrow."""
+    try:
+        result = await multiparty_escrow_service.add_party(
+            escrow_id=escrow_id,
+            user_id=request.user_id,
+            role=PartyRole(request.role),
+            contribution_percentage=request.contribution_percentage,
+            distribution_percentage=request.distribution_percentage,
+            account_id=request.account_id,
+            email=request.email,
+            phone=request.phone,
+            approval_weight=request.approval_weight
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{escrow_id}/parties/{party_id}")
+async def remove_party_from_escrow(escrow_id: str, party_id: str, request: RemovePartyRequest):
+    """Remove a party from an escrow."""
+    try:
+        result = await multiparty_escrow_service.remove_party(
+            escrow_id=escrow_id,
+            party_id=party_id,
+            removed_by=request.removed_by,
+            reason=request.reason
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{escrow_id}/parties")
+async def get_escrow_parties(escrow_id: str, role: Optional[str] = None):
+    """Get all parties for an escrow, optionally filtered by role."""
+    if role:
+        return await multiparty_escrow_service.get_parties_by_role(escrow_id, PartyRole(role))
+    return await multiparty_escrow_service.get_parties(escrow_id)
+
+
+@router.post("/{escrow_id}/contributions")
+async def fund_party_contribution(escrow_id: str, request: FundContributionRequest):
+    """
+    Record a funding contribution from a buyer.
+    
+    Supports partial funding - a buyer can fund in multiple installments.
+    """
+    try:
+        result = await multiparty_escrow_service.fund_contribution(
+            escrow_id=escrow_id,
+            party_id=request.party_id,
+            amount=Decimal(str(request.amount)),
+            account_id=request.account_id,
+            transaction_id=request.transaction_id
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{escrow_id}/funding-status")
+async def get_funding_status(escrow_id: str):
+    """Get detailed funding status for a multiparty escrow."""
+    return await multiparty_escrow_service.get_funding_status(escrow_id)
+
+
+@router.post("/{escrow_id}/approvals")
+async def record_party_approval(escrow_id: str, request: PartyApprovalRequest):
+    """
+    Record an approval from a party.
+    
+    Checks against the approval config to determine if threshold is met.
+    """
+    try:
+        result = await multiparty_escrow_service.record_approval(
+            escrow_id=escrow_id,
+            party_id=request.party_id
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{escrow_id}/approval-status")
+async def get_approval_status(escrow_id: str):
+    """Get detailed approval status for a multiparty escrow."""
+    return await multiparty_escrow_service.get_approval_status(escrow_id)
+
+
+@router.post("/{escrow_id}/distribute")
+async def distribute_to_sellers(escrow_id: str, request: DistributeToSellersRequest):
+    """
+    Distribute funds to all sellers based on their distribution percentages.
+    
+    This should be called after all approvals are received.
+    """
+    try:
+        result = await multiparty_escrow_service.distribute_to_sellers(
+            escrow_id=escrow_id,
+            total_amount=Decimal(str(request.total_amount)),
+            fee_percentage=Decimal(str(request.fee_percentage))
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/{escrow_id}/distribution-status")
+async def get_distribution_status(escrow_id: str):
+    """Get detailed distribution status for a multiparty escrow."""
+    return await multiparty_escrow_service.get_distribution_status(escrow_id)
+
+
+@router.get("/{escrow_id}/refund-calculation")
+async def calculate_refund_distribution(escrow_id: str, refund_amount: float):
+    """
+    Calculate how to distribute a refund among buyers based on their contributions.
+    
+    This is a preview - it doesn't execute the refund.
+    """
+    try:
+        result = await multiparty_escrow_service.calculate_refund_distribution(
+            escrow_id=escrow_id,
+            refund_amount=Decimal(str(refund_amount))
+        )
+        return {"escrow_id": escrow_id, "refund_amount": refund_amount, "distribution": result}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

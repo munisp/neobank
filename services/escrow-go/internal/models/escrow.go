@@ -64,11 +64,156 @@ const (
 type PartyRole string
 
 const (
-	RoleBuyer    PartyRole = "buyer"
-	RoleSeller   PartyRole = "seller"
-	RoleBroker   PartyRole = "broker"
+	RoleBuyer      PartyRole = "buyer"
+	RoleSeller     PartyRole = "seller"
+	RoleBroker     PartyRole = "broker"
 	RoleArbitrator PartyRole = "arbitrator"
+	RoleAgent      PartyRole = "agent"      // Escrow agent/trustee
+	RoleTrustee    PartyRole = "trustee"    // Legal trustee
+	RoleWitness    PartyRole = "witness"    // Transaction witness
+	RoleGuarantor  PartyRole = "guarantor"  // Payment guarantor
+	RoleInspector  PartyRole = "inspector"  // Third-party inspector
+	RoleLawyer     PartyRole = "lawyer"     // Legal representative
 )
+
+// PartyStatus represents the status of a party in the escrow
+type PartyStatus string
+
+const (
+	PartyStatusPending   PartyStatus = "pending"    // Invited but not confirmed
+	PartyStatusActive    PartyStatus = "active"     // Confirmed and participating
+	PartyStatusFunded    PartyStatus = "funded"     // Has contributed funds (for buyers)
+	PartyStatusApproved  PartyStatus = "approved"   // Has given approval
+	PartyStatusWithdrawn PartyStatus = "withdrawn"  // Withdrew from escrow
+	PartyStatusRemoved   PartyStatus = "removed"    // Removed by admin/agent
+)
+
+// ApprovalType defines what type of approval is required
+type ApprovalType string
+
+const (
+	ApprovalTypeAll       ApprovalType = "all"        // All parties must approve
+	ApprovalTypeMajority  ApprovalType = "majority"   // >50% must approve
+	ApprovalTypeThreshold ApprovalType = "threshold"  // N of M must approve
+	ApprovalTypeAny       ApprovalType = "any"        // Any one party can approve
+	ApprovalTypeWeighted  ApprovalType = "weighted"   // Based on contribution percentage
+)
+
+// Party represents a participant in a multiparty escrow
+type Party struct {
+	ID          uuid.UUID   `json:"id" db:"id"`
+	EscrowID    uuid.UUID   `json:"escrow_id" db:"escrow_id"`
+	UserID      uuid.UUID   `json:"user_id" db:"user_id"`
+	
+	Role        PartyRole   `json:"role" db:"role"`
+	Status      PartyStatus `json:"status" db:"status"`
+	
+	// For buyers: contribution amount and percentage
+	ContributionAmount     float64 `json:"contribution_amount" db:"contribution_amount"`
+	ContributionPercentage float64 `json:"contribution_percentage" db:"contribution_percentage"`
+	AmountFunded           float64 `json:"amount_funded" db:"amount_funded"`
+	
+	// For sellers: distribution amount and percentage
+	DistributionAmount     float64 `json:"distribution_amount" db:"distribution_amount"`
+	DistributionPercentage float64 `json:"distribution_percentage" db:"distribution_percentage"`
+	AmountReceived         float64 `json:"amount_received" db:"amount_received"`
+	
+	// Account information
+	AccountID   string `json:"account_id" db:"account_id"`
+	AccountName string `json:"account_name" db:"account_name"`
+	BankCode    string `json:"bank_code" db:"bank_code"`
+	
+	// Approval tracking
+	HasApproved   bool       `json:"has_approved" db:"has_approved"`
+	ApprovedAt    *time.Time `json:"approved_at,omitempty" db:"approved_at"`
+	ApprovalWeight float64   `json:"approval_weight" db:"approval_weight"` // For weighted voting
+	
+	// KYC status
+	KYCVerified bool `json:"kyc_verified" db:"kyc_verified"`
+	
+	// Contact info
+	Email       string `json:"email" db:"email"`
+	Phone       string `json:"phone" db:"phone"`
+	
+	// Metadata
+	Notes       string                 `json:"notes" db:"notes"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	
+	InvitedAt   *time.Time `json:"invited_at,omitempty" db:"invited_at"`
+	JoinedAt    *time.Time `json:"joined_at,omitempty" db:"joined_at"`
+	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+// ApprovalConfig defines the approval requirements for an escrow
+type ApprovalConfig struct {
+	ID          uuid.UUID    `json:"id" db:"id"`
+	EscrowID    uuid.UUID    `json:"escrow_id" db:"escrow_id"`
+	
+	// Approval type and thresholds
+	ApprovalType      ApprovalType `json:"approval_type" db:"approval_type"`
+	RequiredApprovals int          `json:"required_approvals" db:"required_approvals"` // N in N-of-M
+	TotalParties      int          `json:"total_parties" db:"total_parties"`           // M in N-of-M
+	WeightThreshold   float64      `json:"weight_threshold" db:"weight_threshold"`     // For weighted approval
+	
+	// Which roles can approve
+	ApproverRoles []PartyRole `json:"approver_roles"`
+	
+	// Approval deadlines
+	ApprovalDeadline *time.Time `json:"approval_deadline,omitempty" db:"approval_deadline"`
+	AutoApproveAfter *time.Time `json:"auto_approve_after,omitempty" db:"auto_approve_after"`
+	
+	// Current approval status
+	CurrentApprovals int     `json:"current_approvals" db:"current_approvals"`
+	CurrentWeight    float64 `json:"current_weight" db:"current_weight"`
+	IsApproved       bool    `json:"is_approved" db:"is_approved"`
+	
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// FundingContribution tracks individual funding contributions
+type FundingContribution struct {
+	ID            uuid.UUID `json:"id" db:"id"`
+	EscrowID      uuid.UUID `json:"escrow_id" db:"escrow_id"`
+	PartyID       uuid.UUID `json:"party_id" db:"party_id"`
+	
+	Amount        float64   `json:"amount" db:"amount"`
+	Currency      string    `json:"currency" db:"currency"`
+	
+	TransactionID string    `json:"transaction_id" db:"transaction_id"`
+	AccountID     string    `json:"account_id" db:"account_id"`
+	
+	Status        string    `json:"status" db:"status"` // pending, confirmed, failed, refunded
+	
+	FundedAt      time.Time `json:"funded_at" db:"funded_at"`
+	ConfirmedAt   *time.Time `json:"confirmed_at,omitempty" db:"confirmed_at"`
+	
+	CreatedAt     time.Time `json:"created_at" db:"created_at"`
+}
+
+// PayoutDistribution tracks individual payout distributions
+type PayoutDistribution struct {
+	ID            uuid.UUID `json:"id" db:"id"`
+	EscrowID      uuid.UUID `json:"escrow_id" db:"escrow_id"`
+	PartyID       uuid.UUID `json:"party_id" db:"party_id"`
+	MilestoneID   *uuid.UUID `json:"milestone_id,omitempty" db:"milestone_id"`
+	
+	GrossAmount   float64   `json:"gross_amount" db:"gross_amount"`
+	FeeAmount     float64   `json:"fee_amount" db:"fee_amount"`
+	NetAmount     float64   `json:"net_amount" db:"net_amount"`
+	Currency      string    `json:"currency" db:"currency"`
+	
+	TransactionID string    `json:"transaction_id" db:"transaction_id"`
+	AccountID     string    `json:"account_id" db:"account_id"`
+	
+	Status        string    `json:"status" db:"status"` // pending, processing, completed, failed
+	
+	ReleasedAt    *time.Time `json:"released_at,omitempty" db:"released_at"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty" db:"completed_at"`
+	
+	CreatedAt     time.Time `json:"created_at" db:"created_at"`
+}
 
 type Escrow struct {
 	ID              uuid.UUID    `json:"id" db:"id"`
@@ -79,9 +224,36 @@ type Escrow struct {
 	Title           string `json:"title" db:"title"`
 	Description     string `json:"description" db:"description"`
 	
+	// Legacy single-party fields (for backward compatibility)
 	BuyerID         uuid.UUID `json:"buyer_id" db:"buyer_id"`
 	SellerID        uuid.UUID `json:"seller_id" db:"seller_id"`
 	BrokerID        *uuid.UUID `json:"broker_id,omitempty" db:"broker_id"`
+	
+	// Multiparty configuration
+	IsMultiparty    bool `json:"is_multiparty" db:"is_multiparty"`
+	TotalBuyers     int  `json:"total_buyers" db:"total_buyers"`
+	TotalSellers    int  `json:"total_sellers" db:"total_sellers"`
+	TotalParties    int  `json:"total_parties" db:"total_parties"`
+	
+	// Agent/Trustee (separate from arbitrator)
+	AgentID         *uuid.UUID `json:"agent_id,omitempty" db:"agent_id"`
+	TrusteeID       *uuid.UUID `json:"trustee_id,omitempty" db:"trustee_id"`
+	
+	// Approval configuration
+	ApprovalType         ApprovalType `json:"approval_type" db:"approval_type"`
+	RequiredBuyerApprovals  int       `json:"required_buyer_approvals" db:"required_buyer_approvals"`
+	RequiredSellerApprovals int       `json:"required_seller_approvals" db:"required_seller_approvals"`
+	CurrentBuyerApprovals   int       `json:"current_buyer_approvals" db:"current_buyer_approvals"`
+	CurrentSellerApprovals  int       `json:"current_seller_approvals" db:"current_seller_approvals"`
+	
+	// Funding tracking for multiparty
+	TotalFundingRequired float64 `json:"total_funding_required" db:"total_funding_required"`
+	TotalFundingReceived float64 `json:"total_funding_received" db:"total_funding_received"`
+	FundingComplete      bool    `json:"funding_complete" db:"funding_complete"`
+	
+	// Distribution tracking for multiparty
+	TotalDistributed float64 `json:"total_distributed" db:"total_distributed"`
+	DistributionComplete bool `json:"distribution_complete" db:"distribution_complete"`
 	
 	Amount          float64 `json:"amount" db:"amount"`
 	Currency        string  `json:"currency" db:"currency"`
