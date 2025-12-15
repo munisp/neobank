@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/investments-service/internal/config"
 	"github.com/neobank/investments-service/internal/database"
 	"github.com/neobank/investments-service/internal/models"
+	"github.com/neobank/investments-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type TradingHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewTradingHandler(db *database.InMemoryDB, cfg *config.Config) *TradingHandler {
-	return &TradingHandler{db: db, cfg: cfg}
+	return &TradingHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // GetStocks returns all available stocks
@@ -335,6 +341,23 @@ func (h *TradingHandler) executeOrder(c *gin.Context, order *models.Order, portf
 	
 	portfolio.UpdatedAt = now
 	h.db.UpdatePortfolio(c.Request.Context(), portfolio)
+	
+	// Publish investment event to Kafka for lakehouse analytics
+	h.publisher.PublishInvestment(c.Request.Context(), map[string]interface{}{
+		"order_id":      order.ID.String(),
+		"user_id":       order.UserID.String(),
+		"portfolio_id":  portfolio.ID.String(),
+		"symbol":        order.Symbol,
+		"asset_type":    string(order.AssetType),
+		"exchange":      string(order.Exchange),
+		"side":          string(order.Side),
+		"quantity":      order.Quantity.String(),
+		"price":         price.String(),
+		"total_amount":  order.TotalAmount.String(),
+		"commission":    order.Commission.String(),
+		"status":        string(order.Status),
+		"executed_at":   now.Format(time.RFC3339),
+	})
 }
 
 // GetOrders returns user's orders

@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/savings-service/internal/config"
 	"github.com/neobank/savings-service/internal/database"
 	"github.com/neobank/savings-service/internal/models"
+	"github.com/neobank/savings-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type SavingsHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewSavingsHandler(db *database.InMemoryDB, cfg *config.Config) *SavingsHandler {
-	return &SavingsHandler{db: db, cfg: cfg}
+	return &SavingsHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // CreateVault creates a new savings vault
@@ -112,6 +118,21 @@ func (h *SavingsHandler) CreateVault(c *gin.Context) {
 			h.db.UpdateVault(c.Request.Context(), vault)
 		}
 	}
+	
+	// Publish savings event to Kafka for lakehouse analytics
+	h.publisher.PublishSavings(c.Request.Context(), map[string]interface{}{
+		"vault_id":      vault.ID.String(),
+		"user_id":       vault.UserID.String(),
+		"name":          vault.Name,
+		"type":          string(vault.Type),
+		"currency":      vault.Currency,
+		"balance":       vault.Balance.String(),
+		"target_amount": vault.TargetAmount.String(),
+		"interest_rate": vault.InterestRate.String(),
+		"status":        string(vault.Status),
+		"event_type":    "vault_created",
+		"created_at":    now.Format(time.RFC3339),
+	})
 	
 	c.JSON(http.StatusCreated, vault)
 }

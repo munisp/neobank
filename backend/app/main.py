@@ -201,6 +201,26 @@ def create_application() -> FastAPI:
         escrow_router,
     )
     
+    # Additional routers (previously unmounted)
+    from app.routers import (
+        biometrics_router,
+        card_router,
+        compliance_router,
+        device_router,
+        dispute_router,
+        fx_router,
+        kyc_router as kyc_router_v2,
+        lakehouse_router,
+        lite_router,
+        loan_router,
+        notification_router,
+        qr_router,
+        reconciliation_router,
+        sms_router,
+        transfer_router,
+        ussd_router,
+    )
+    
     # Investment & Trading (African exchanges: NGX, JSE, NSE, etc.)
     app.include_router(investment_router.router, prefix="/api/v1", tags=["Investments"])
     # Also mount at /api for backward compatibility
@@ -241,6 +261,69 @@ def create_application() -> FastAPI:
     # Escrow (P2P, Marketplace, Real Estate, Vehicle, Service, Milestone)
     app.include_router(escrow_router.router, prefix="/api/v1", tags=["Escrow"])
     app.include_router(escrow_router.router, prefix="/api", tags=["Escrow"])
+    
+    # Biometrics (Face ID, Fingerprint, Voice)
+    app.include_router(biometrics_router.router, prefix="/api/v1/biometrics", tags=["Biometrics"])
+    app.include_router(biometrics_router.router, prefix="/api/biometrics", tags=["Biometrics"])
+    
+    # Cards (Virtual, Physical, Controls)
+    app.include_router(card_router.router, prefix="/api/v1/cards", tags=["Cards"])
+    app.include_router(card_router.router, prefix="/api/cards", tags=["Cards"])
+    
+    # Compliance (AML, Sanctions, Reporting)
+    app.include_router(compliance_router.router, prefix="/api/v1/compliance", tags=["Compliance"])
+    app.include_router(compliance_router.router, prefix="/api/compliance", tags=["Compliance"])
+    
+    # Device Management (Registration, Trust)
+    app.include_router(device_router.router, prefix="/api/v1/devices", tags=["Devices"])
+    app.include_router(device_router.router, prefix="/api/devices", tags=["Devices"])
+    
+    # Disputes (Chargebacks, Resolution)
+    app.include_router(dispute_router.router, prefix="/api/v1/disputes", tags=["Disputes"])
+    app.include_router(dispute_router.router, prefix="/api/disputes", tags=["Disputes"])
+    
+    # FX (Currency Exchange, Rates)
+    app.include_router(fx_router.router, prefix="/api/v1/fx", tags=["FX"])
+    app.include_router(fx_router.router, prefix="/api/fx", tags=["FX"])
+    
+    # KYC v2 (Enhanced verification)
+    app.include_router(kyc_router_v2.router, prefix="/api/v1/kyc", tags=["KYC v2"])
+    
+    # Lakehouse (Analytics, Data Lake)
+    app.include_router(lakehouse_router.router, prefix="/api/v1/lakehouse", tags=["Lakehouse"])
+    app.include_router(lakehouse_router.router, prefix="/api/lakehouse", tags=["Lakehouse"])
+    
+    # Lite (Low bandwidth, Feature phones)
+    app.include_router(lite_router.router, prefix="/api/v1/lite", tags=["Lite"])
+    app.include_router(lite_router.router, prefix="/api/lite", tags=["Lite"])
+    
+    # Loans (Personal, Business, Mortgage)
+    app.include_router(loan_router.router, prefix="/api/v1/loans", tags=["Loans"])
+    app.include_router(loan_router.router, prefix="/api/loans", tags=["Loans"])
+    
+    # Notifications (Push, SMS, Email)
+    app.include_router(notification_router.router, prefix="/api/v1/notifications", tags=["Notifications"])
+    app.include_router(notification_router.router, prefix="/api/notifications", tags=["Notifications"])
+    
+    # QR Payments (Generate, Scan, Pay)
+    app.include_router(qr_router.router, prefix="/api/v1/qr", tags=["QR Payments"])
+    app.include_router(qr_router.router, prefix="/api/qr", tags=["QR Payments"])
+    
+    # Reconciliation (Settlement, Matching)
+    app.include_router(reconciliation_router.router, prefix="/api/v1/reconciliation", tags=["Reconciliation"])
+    app.include_router(reconciliation_router.router, prefix="/api/reconciliation", tags=["Reconciliation"])
+    
+    # SMS Banking (Feature phones)
+    app.include_router(sms_router.router, prefix="/api/v1/sms", tags=["SMS Banking"])
+    app.include_router(sms_router.router, prefix="/api/sms", tags=["SMS Banking"])
+    
+    # Transfers (Domestic, International, P2P)
+    app.include_router(transfer_router.router, prefix="/api/v1/transfers", tags=["Transfers"])
+    app.include_router(transfer_router.router, prefix="/api/transfers", tags=["Transfers"])
+    
+    # USSD Banking (Feature phones, Low connectivity)
+    app.include_router(ussd_router.router, prefix="/api/v1/ussd", tags=["USSD"])
+    app.include_router(ussd_router.router, prefix="/api/ussd", tags=["USSD"])
     
     return app
 

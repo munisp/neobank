@@ -32,6 +32,16 @@ flower==2.0.1
 prometheus-client==0.19.0
 structlog==23.2.0
 
+# OpenTelemetry (Distributed Tracing & Observability)
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-exporter-otlp==1.21.0
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-instrumentation-httpx==0.42b0
+opentelemetry-instrumentation-sqlalchemy==0.42b0
+opentelemetry-instrumentation-redis==0.42b0
+opentelemetry-instrumentation-logging==0.42b0
+
 # Development
 pytest==7.4.3
 pytest-asyncio==0.21.1
