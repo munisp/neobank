@@ -28,7 +28,7 @@ logger = structlog.get_logger()
 
 router = APIRouter(prefix="/escrow", tags=["Escrow"])
 
-ESCROW_SERVICE_URL = os.getenv("ESCROW_SERVICE_URL", "http://localhost:8090")
+ESCROW_SERVICE_URL = os.getenv("ESCROW_SERVICE_URL", "http://localhost:8091")
 
 
 class EscrowType(str, Enum):

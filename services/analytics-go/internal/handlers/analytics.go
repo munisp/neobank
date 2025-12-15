@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/analytics-service/internal/config"
 	"github.com/neobank/analytics-service/internal/database"
 	"github.com/neobank/analytics-service/internal/models"
+	"github.com/neobank/analytics-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type AnalyticsHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewAnalyticsHandler(db *database.InMemoryDB, cfg *config.Config) *AnalyticsHandler {
-	return &AnalyticsHandler{db: db, cfg: cfg}
+	return &AnalyticsHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // RecordTransaction records a transaction for analytics
@@ -51,6 +57,20 @@ func (h *AnalyticsHandler) RecordTransaction(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record transaction"})
 		return
 	}
+	
+	// Publish transaction event to Kafka for lakehouse analytics
+	h.publisher.PublishTransaction(c.Request.Context(), map[string]interface{}{
+		"transaction_id": tx.ID.String(),
+		"user_id":        tx.UserID.String(),
+		"account_id":     tx.AccountID.String(),
+		"type":           tx.Type,
+		"amount":         tx.Amount.String(),
+		"currency":       tx.Currency,
+		"category":       tx.Category,
+		"merchant_name":  tx.MerchantName,
+		"event_type":     "transaction_recorded",
+		"created_at":     now.Format(time.RFC3339),
+	})
 	
 	// Update budget if exists
 	if req.Type == "debit" {

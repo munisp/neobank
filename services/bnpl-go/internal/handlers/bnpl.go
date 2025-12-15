@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/bnpl-service/internal/config"
 	"github.com/neobank/bnpl-service/internal/database"
 	"github.com/neobank/bnpl-service/internal/models"
+	"github.com/neobank/bnpl-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type BNPLHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewBNPLHandler(db *database.InMemoryDB, cfg *config.Config) *BNPLHandler {
-	return &BNPLHandler{db: db, cfg: cfg}
+	return &BNPLHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // GetPlans returns available BNPL plans
@@ -225,6 +231,20 @@ func (h *BNPLHandler) CreatePurchase(c *gin.Context) {
 	limit.AvailableLimit = limit.TotalLimit.Sub(limit.UsedLimit)
 	limit.UpdatedAt = now
 	h.db.UpdateLimit(c.Request.Context(), limit)
+	
+	// Publish BNPL purchase event to Kafka for lakehouse analytics
+	h.publisher.PublishBNPL(c.Request.Context(), map[string]interface{}{
+		"purchase_id":        purchase.ID.String(),
+		"user_id":            purchase.UserID.String(),
+		"plan_type":          purchase.PlanType,
+		"merchant_name":      purchase.MerchantName,
+		"purchase_amount":    purchase.PurchaseAmount.String(),
+		"total_amount":       purchase.TotalAmount.String(),
+		"total_installments": purchase.TotalInstallments,
+		"status":             string(purchase.Status),
+		"event_type":         "bnpl_purchase_created",
+		"created_at":         now.Format(time.RFC3339),
+	})
 	
 	c.JSON(http.StatusCreated, purchase)
 }

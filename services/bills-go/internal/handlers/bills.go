@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/bills-service/internal/config"
 	"github.com/neobank/bills-service/internal/database"
 	"github.com/neobank/bills-service/internal/models"
+	"github.com/neobank/bills-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type BillsHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewBillsHandler(db *database.InMemoryDB, cfg *config.Config) *BillsHandler {
-	return &BillsHandler{db: db, cfg: cfg}
+	return &BillsHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // GetBillers returns available billers
@@ -174,6 +180,21 @@ func (h *BillsHandler) PayBill(c *gin.Context) {
 		payment.StatusMessage = "Payment successful"
 		h.db.UpdatePayment(c.Request.Context(), payment)
 	}
+	
+	// Publish bill payment event to Kafka for lakehouse analytics
+	h.publisher.PublishBill(c.Request.Context(), map[string]interface{}{
+		"payment_id":    payment.ID.String(),
+		"user_id":       payment.UserID.String(),
+		"biller_id":     payment.BillerID.String(),
+		"biller_name":   payment.BillerName,
+		"category":      payment.Category,
+		"amount":        payment.Amount.String(),
+		"total_amount":  payment.TotalAmount.String(),
+		"status":        string(payment.Status),
+		"reference":     payment.Reference,
+		"event_type":    "bill_payment_completed",
+		"created_at":    now.Format(time.RFC3339),
+	})
 	
 	c.JSON(http.StatusCreated, gin.H{
 		"payment": payment,

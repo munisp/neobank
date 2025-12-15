@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/rewards-service/internal/config"
 	"github.com/neobank/rewards-service/internal/database"
 	"github.com/neobank/rewards-service/internal/models"
+	"github.com/neobank/rewards-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type RewardsHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewRewardsHandler(db *database.InMemoryDB, cfg *config.Config) *RewardsHandler {
-	return &RewardsHandler{db: db, cfg: cfg}
+	return &RewardsHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // GetPrograms returns available reward programs
@@ -157,6 +163,20 @@ func (h *RewardsHandler) EarnReward(c *gin.Context) {
 	userRewards.NextTierPoints = nextTierPoints
 	
 	h.db.UpdateUserRewards(c.Request.Context(), userRewards)
+	
+	// Publish reward event to Kafka for lakehouse analytics
+	h.publisher.PublishReward(c.Request.Context(), map[string]interface{}{
+		"reward_id":       reward.ID.String(),
+		"user_id":         reward.UserID.String(),
+		"type":            string(reward.Type),
+		"points":          reward.Points.String(),
+		"cashback":        reward.Amount.String(),
+		"merchant_name":   reward.MerchantName,
+		"category":        reward.Category,
+		"tier":            userRewards.Tier,
+		"event_type":      "reward_earned",
+		"created_at":      now.Format(time.RFC3339),
+	})
 	
 	c.JSON(http.StatusCreated, gin.H{
 		"reward":          reward,

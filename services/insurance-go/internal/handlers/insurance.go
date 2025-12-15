@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/insurance-service/internal/config"
 	"github.com/neobank/insurance-service/internal/database"
 	"github.com/neobank/insurance-service/internal/models"
+	"github.com/neobank/insurance-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type InsuranceHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewInsuranceHandler(db *database.InMemoryDB, cfg *config.Config) *InsuranceHandler {
-	return &InsuranceHandler{db: db, cfg: cfg}
+	return &InsuranceHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // GetProducts returns available insurance products
@@ -182,6 +188,21 @@ func (h *InsuranceHandler) PurchasePolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create policy"})
 		return
 	}
+	
+	// Publish insurance policy event to Kafka for lakehouse analytics
+	h.publisher.PublishInsurance(c.Request.Context(), map[string]interface{}{
+		"policy_id":        policy.ID.String(),
+		"user_id":          policy.UserID.String(),
+		"product_id":       policy.ProductID.String(),
+		"type":             string(policy.Type),
+		"policy_number":    policy.PolicyNumber,
+		"status":           string(policy.Status),
+		"coverage_amount":  policy.CoverageAmount.String(),
+		"premium":          policy.Premium.String(),
+		"payment_frequency": policy.PaymentFrequency,
+		"event_type":       "policy_purchased",
+		"created_at":       now.Format(time.RFC3339),
+	})
 	
 	c.JSON(http.StatusCreated, policy)
 }

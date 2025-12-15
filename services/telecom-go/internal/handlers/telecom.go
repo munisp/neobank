@@ -10,15 +10,21 @@ import (
 	"github.com/neobank/telecom-service/internal/config"
 	"github.com/neobank/telecom-service/internal/database"
 	"github.com/neobank/telecom-service/internal/models"
+	"github.com/neobank/telecom-service/pkg/kafka"
 )
 
 type TelecomHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewTelecomHandler(db *database.InMemoryDB, cfg *config.Config) *TelecomHandler {
-	return &TelecomHandler{db: db, cfg: cfg}
+	return &TelecomHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // GetNetworks returns available networks
@@ -184,6 +190,21 @@ func (h *TelecomHandler) BuyAirtime(c *gin.Context) {
 	txn.StatusMessage = "Airtime delivered successfully"
 	txn.CompletedAt = &now
 	h.db.UpdateAirtimeTransaction(c.Request.Context(), txn)
+	
+	// Publish telecom event to Kafka for lakehouse analytics
+	h.publisher.PublishTelecom(c.Request.Context(), map[string]interface{}{
+		"transaction_id": txn.ID.String(),
+		"user_id":        txn.UserID.String(),
+		"network_id":     txn.NetworkID.String(),
+		"network_name":   txn.NetworkName,
+		"phone_number":   txn.PhoneNumber,
+		"amount":         txn.Amount.String(),
+		"type":           "airtime",
+		"status":         string(txn.Status),
+		"reference":      txn.Reference,
+		"event_type":     "airtime_purchased",
+		"created_at":     now.Format(time.RFC3339),
+	})
 	
 	c.JSON(http.StatusCreated, gin.H{
 		"transaction": txn,

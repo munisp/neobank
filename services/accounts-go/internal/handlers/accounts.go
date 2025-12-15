@@ -9,16 +9,22 @@ import (
 	"github.com/neobank/accounts-service/internal/config"
 	"github.com/neobank/accounts-service/internal/database"
 	"github.com/neobank/accounts-service/internal/models"
+	"github.com/neobank/accounts-service/pkg/kafka"
 	"github.com/shopspring/decimal"
 )
 
 type AccountsHandler struct {
-	db  *database.InMemoryDB
-	cfg *config.Config
+	db        *database.InMemoryDB
+	cfg       *config.Config
+	publisher *kafka.EventPublisher
 }
 
 func NewAccountsHandler(db *database.InMemoryDB, cfg *config.Config) *AccountsHandler {
-	return &AccountsHandler{db: db, cfg: cfg}
+	return &AccountsHandler{
+		db:        db,
+		cfg:       cfg,
+		publisher: kafka.GetPublisher(),
+	}
 }
 
 // GetAccounts returns user's accounts
@@ -114,6 +120,20 @@ func (h *AccountsHandler) CreateJointAccount(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create account"})
 		return
 	}
+	
+	// Publish account event to Kafka for lakehouse analytics
+	h.publisher.PublishAccount(c.Request.Context(), map[string]interface{}{
+		"account_id":     account.ID.String(),
+		"user_id":        account.UserID.String(),
+		"type":           string(account.Type),
+		"status":         string(account.Status),
+		"account_number": account.AccountNumber,
+		"currency":       account.Currency,
+		"balance":        account.Balance.String(),
+		"name":           account.Name,
+		"event_type":     "account_created",
+		"created_at":     now.Format(time.RFC3339),
+	})
 	
 	// Create invitation for the other person
 	invitation := &models.AccountInvitation{

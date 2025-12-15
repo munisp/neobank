@@ -15,6 +15,7 @@ import (
 	"github.com/neobank/kyc-kyb-service/internal/database"
 	"github.com/neobank/kyc-kyb-service/internal/models"
 	"github.com/neobank/kyc-kyb-service/pkg/compliance"
+	"github.com/neobank/kyc-kyb-service/pkg/kafka"
 )
 
 // KYCHandler handles KYC-related HTTP requests
@@ -24,6 +25,7 @@ type KYCHandler struct {
 	amlService             *compliance.AMLService
 	riskService            *compliance.RiskScoringService
 	countryVerifyService   *compliance.CountryVerificationService
+	publisher              *kafka.EventPublisher
 }
 
 // NewKYCHandler creates a new KYC handler
@@ -47,6 +49,7 @@ func NewKYCHandler(db *database.InMemoryDB, cfg *config.Config) *KYCHandler {
 		amlService:           amlService,
 		riskService:          compliance.NewRiskScoringService(),
 		countryVerifyService: countryVerifyService,
+		publisher:            kafka.GetPublisher(),
 	}
 }
 
@@ -94,6 +97,15 @@ func (h *KYCHandler) InitiateKYC(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create application"})
 		return
 	}
+
+	// Publish KYC event to Kafka for lakehouse analytics
+	h.publisher.PublishKYC(c.Request.Context(), map[string]interface{}{
+		"application_id": app.ID.String(),
+		"user_id":        uid.String(),
+		"tier":           string(app.Tier),
+		"status":         string(app.Status),
+		"event_type":     "kyc_initiated",
+	})
 
 	c.JSON(http.StatusCreated, models.InitiateKYCResponse{
 		ApplicationID: app.ID,
