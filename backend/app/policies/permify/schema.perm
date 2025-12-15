@@ -1,0 +1,344 @@
+// NeoBank Permify Authorization Schema
+// Fine-grained relationship-based access control (ReBAC)
+
+// ============================================
+// USER ENTITY
+// ============================================
+entity user {}
+
+// ============================================
+// ORGANIZATION ENTITY (for KYB)
+// ============================================
+entity organization {
+    // Relations
+    relation owner @user
+    relation admin @user
+    relation member @user
+    relation compliance_officer @user
+    
+    // Permissions
+    permission view = owner or admin or member or compliance_officer
+    permission edit = owner or admin
+    permission delete = owner
+    permission manage_members = owner or admin
+    permission view_financials = owner or admin or compliance_officer
+}
+
+// ============================================
+// ACCOUNT ENTITY
+// ============================================
+entity account {
+    // Relations
+    relation owner @user
+    relation joint_holder @user
+    relation authorized_user @user
+    relation parent_account @account
+    relation organization @organization
+    
+    // Permissions
+    permission view = owner or joint_holder or authorized_user or organization.admin
+    permission transfer = owner or joint_holder or (authorized_user and not is_frozen)
+    permission manage = owner
+    permission freeze = owner or organization.admin
+    permission close = owner and not has_pending_transactions
+    permission set_limits = owner or joint_holder
+    
+    // Attributes
+    attribute is_frozen boolean
+    attribute has_pending_transactions boolean
+    attribute kyc_tier string
+    attribute daily_limit decimal
+}
+
+// ============================================
+// TRANSACTION ENTITY
+// ============================================
+entity transaction {
+    // Relations
+    relation initiator @user
+    relation account @account
+    relation approver @user
+    
+    // Permissions
+    permission view = initiator or account.owner or account.joint_holder or approver
+    permission approve = approver and not initiator
+    permission cancel = initiator and is_pending
+    permission dispute = initiator or account.owner
+    
+    // Attributes
+    attribute is_pending boolean
+    attribute amount decimal
+    attribute requires_approval boolean
+}
+
+// ============================================
+// KYC APPLICATION ENTITY
+// ============================================
+entity kyc_application {
+    // Relations
+    relation applicant @user
+    relation reviewer @user
+    relation approver @user
+    
+    // Permissions
+    permission view = applicant or reviewer or approver
+    permission submit = applicant
+    permission review = reviewer or approver
+    permission approve = approver and not applicant
+    permission reject = approver and not applicant
+    permission request_documents = reviewer or approver
+}
+
+// ============================================
+// KYB APPLICATION ENTITY
+// ============================================
+entity kyb_application {
+    // Relations
+    relation organization @organization
+    relation submitter @user
+    relation reviewer @user
+    relation approver @user
+    
+    // Permissions
+    permission view = organization.owner or organization.admin or reviewer or approver
+    permission submit = organization.owner or organization.admin
+    permission review = reviewer or approver
+    permission approve = approver
+    permission reject = approver
+}
+
+// ============================================
+// LOAN ENTITY
+// ============================================
+entity loan {
+    // Relations
+    relation borrower @user
+    relation guarantor @user
+    relation credit_officer @user
+    relation collection_agent @user
+    relation organization @organization
+    
+    // Permissions
+    permission view = borrower or guarantor or credit_officer or collection_agent or organization.owner
+    permission apply = borrower
+    permission approve = credit_officer and not borrower
+    permission reject = credit_officer and not borrower
+    permission make_payment = borrower or guarantor
+    permission restructure = credit_officer
+    permission collect = collection_agent
+}
+
+// ============================================
+// INVESTMENT ENTITY
+// ============================================
+entity investment {
+    // Relations
+    relation owner @user
+    relation advisor @user
+    relation account @account
+    
+    // Permissions
+    permission view = owner or advisor or account.owner
+    permission buy = owner and account.transfer
+    permission sell = owner and account.transfer
+    permission transfer = owner
+    permission get_advice = owner or advisor
+    
+    // Attributes
+    attribute is_locked boolean
+    attribute min_kyc_tier string
+}
+
+// ============================================
+// INSURANCE POLICY ENTITY
+// ============================================
+entity insurance_policy {
+    // Relations
+    relation policyholder @user
+    relation beneficiary @user
+    relation agent @user
+    relation claims_adjuster @user
+    
+    // Permissions
+    permission view = policyholder or beneficiary or agent or claims_adjuster
+    permission purchase = policyholder
+    permission cancel = policyholder or agent
+    permission file_claim = policyholder or beneficiary
+    permission process_claim = claims_adjuster
+    permission update_beneficiary = policyholder
+}
+
+// ============================================
+// ESCROW ENTITY
+// ============================================
+entity escrow {
+    // Relations
+    relation buyer @user
+    relation seller @user
+    relation arbitrator @user
+    relation broker @user
+    relation agent @user
+    relation trustee @user
+    
+    // Permissions
+    permission view = buyer or seller or arbitrator or broker or agent or trustee
+    permission fund = buyer
+    permission release_request = seller
+    permission approve_release = buyer
+    permission dispute = buyer or seller
+    permission resolve = arbitrator or trustee
+    permission cancel = (buyer or seller) and is_pending
+    permission add_party = buyer or seller or agent
+    
+    // Attributes
+    attribute is_pending boolean
+    attribute is_disputed boolean
+    attribute status string
+}
+
+// ============================================
+// CARD ENTITY
+// ============================================
+entity card {
+    // Relations
+    relation owner @user
+    relation account @account
+    relation authorized_user @user
+    
+    // Permissions
+    permission view = owner or authorized_user or account.owner
+    permission use = owner or authorized_user and not is_frozen
+    permission freeze = owner or account.owner
+    permission unfreeze = owner or account.owner
+    permission set_limits = owner
+    permission set_pin = owner
+    permission cancel = owner or account.owner
+    
+    // Attributes
+    attribute is_frozen boolean
+    attribute is_virtual boolean
+}
+
+// ============================================
+// REWARD ENTITY
+// ============================================
+entity reward {
+    // Relations
+    relation owner @user
+    relation program @reward_program
+    
+    // Permissions
+    permission view = owner
+    permission redeem = owner and not is_expired
+    permission transfer = owner and program.allows_transfer
+    
+    // Attributes
+    attribute is_expired boolean
+    attribute points decimal
+}
+
+entity reward_program {
+    // Relations
+    relation admin @user
+    relation partner @organization
+    
+    // Permissions
+    permission view = admin or partner.member
+    permission manage = admin
+    permission create_offer = admin or partner.admin
+    
+    // Attributes
+    attribute allows_transfer boolean
+}
+
+// ============================================
+// TELECOM/ESIM ENTITY
+// ============================================
+entity esim {
+    // Relations
+    relation owner @user
+    relation account @account
+    
+    // Permissions
+    permission view = owner or account.owner
+    permission activate = owner
+    permission deactivate = owner
+    permission transfer = owner
+    permission top_up = owner or account.owner
+}
+
+// ============================================
+// BILL PAYMENT ENTITY
+// ============================================
+entity bill_payment {
+    // Relations
+    relation payer @user
+    relation account @account
+    relation biller @organization
+    
+    // Permissions
+    permission view = payer or account.owner
+    permission pay = payer and account.transfer
+    permission schedule = payer
+    permission cancel = payer and is_scheduled
+    
+    // Attributes
+    attribute is_scheduled boolean
+    attribute is_recurring boolean
+}
+
+// ============================================
+// BNPL (BUY NOW PAY LATER) ENTITY
+// ============================================
+entity bnpl_purchase {
+    // Relations
+    relation buyer @user
+    relation merchant @organization
+    relation account @account
+    
+    // Permissions
+    permission view = buyer or merchant.admin or account.owner
+    permission create = buyer and has_bnpl_limit
+    permission make_payment = buyer or account.owner
+    permission early_payoff = buyer
+    
+    // Attributes
+    attribute has_bnpl_limit boolean
+    attribute is_overdue boolean
+}
+
+// ============================================
+// ANALYTICS/REPORTS ENTITY
+// ============================================
+entity analytics_report {
+    // Relations
+    relation owner @user
+    relation organization @organization
+    relation viewer @user
+    
+    // Permissions
+    permission view = owner or viewer or organization.admin or organization.compliance_officer
+    permission create = owner or organization.admin
+    permission export = owner or organization.admin
+    permission share = owner
+}
+
+// ============================================
+// SYSTEM ADMIN ENTITY
+// ============================================
+entity system {
+    // Relations
+    relation super_admin @user
+    relation admin @user
+    relation support_agent @user
+    relation compliance_officer @user
+    
+    // Permissions
+    permission manage_users = super_admin or admin
+    permission view_all_accounts = super_admin or admin or compliance_officer
+    permission view_all_transactions = super_admin or admin or compliance_officer
+    permission manage_system = super_admin
+    permission view_audit_logs = super_admin or admin or compliance_officer
+    permission manage_policies = super_admin
+    permission support_access = super_admin or admin or support_agent
+}

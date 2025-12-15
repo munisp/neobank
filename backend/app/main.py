@@ -20,10 +20,12 @@ from app.middleware.security import SecurityMiddleware
 from app.middleware.rate_limiting import RateLimitMiddleware
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.auth import AuthenticationMiddleware
+from app.middleware.pbac_middleware import PBACMiddleware
 from app.routers import auth, accounts, transactions, kyc, dashboard, fraud
 from app.exceptions import setup_exception_handlers
 from app.services.opa_service import initialize_opa_service, close_opa_service, opa_service
 from app.services.monitoring_service import initialize_monitoring, monitoring_service
+from app.services.permify_service import initialize_permify_service, close_permify_service
 
 # Configure structured logging
 structlog.configure(
@@ -56,6 +58,9 @@ async def lifespan(app: FastAPI):
         await init_database()
         logger.info("Database initialized successfully")
         await initialize_opa_service()
+        logger.info("OPA service initialized")
+        await initialize_permify_service()
+        logger.info("Permify service initialized")
         initialize_monitoring(app)
     except Exception as e:
         logger.error("Failed to initialize services", error=str(e))
@@ -73,6 +78,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down NeoBank API")
     await close_database()
     await close_opa_service()
+    await close_permify_service()
     logger.info("NeoBank API shutdown complete")
 
 
@@ -105,11 +111,13 @@ def create_application() -> FastAPI:
         allow_headers=settings.ALLOWED_HEADERS,
     )
     
-    # Custom middleware
+    # Custom middleware (order matters - first added is last executed)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(SecurityMiddleware)
     app.add_middleware(AuthenticationMiddleware)
+    # PBAC middleware - enforces policy-based access control using OPA and Permify
+    app.add_middleware(PBACMiddleware, use_opa=True, use_permify=True)
     
     # Exception handlers
     setup_exception_handlers(app)
