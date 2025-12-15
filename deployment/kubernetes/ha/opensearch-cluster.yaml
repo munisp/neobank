@@ -1,0 +1,791 @@
+# OpenSearch Cluster Deployment for NeoBank
+# Comprehensive search and analytics platform for banking operations
+# Author: Manus AI - NeoBank Observability Team
+# Version: 2.0 Production
+
+---
+# Namespace for OpenSearch
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opensearch-system
+  labels:
+    name: opensearch-system
+    tier: observability
+
+---
+# OpenSearch Master Nodes
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch-master
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: master
+spec:
+  serviceName: opensearch-master-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch
+      app.kubernetes.io/component: master
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch
+        app.kubernetes.io/component: master
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9600"
+    spec:
+      serviceAccountName: opensearch
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      
+      initContainers:
+      - name: configure-sysctl
+        image: busybox:1.35
+        command: ['sh', '-c', 'sysctl -w vm.max_map_count=262144']
+        securityContext:
+          privileged: true
+      
+      containers:
+      - name: opensearch
+        image: opensearchproject/opensearch:2.11.0
+        imagePullPolicy: Always
+        
+        env:
+        - name: cluster.name
+          value: "neobank-opensearch"
+        - name: node.name
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: discovery.seed_hosts
+          value: "opensearch-master-headless"
+        - name: cluster.initial_master_nodes
+          value: "opensearch-master-0,opensearch-master-1,opensearch-master-2"
+        - name: node.roles
+          value: "master"
+        - name: bootstrap.memory_lock
+          value: "true"
+        - name: OPENSEARCH_JAVA_OPTS
+          value: "-Xms4g -Xmx4g"
+        - name: DISABLE_SECURITY_PLUGIN
+          value: "false"
+        - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: admin-password
+        
+        # Banking-specific configurations
+        - name: indices.recovery.max_bytes_per_sec
+          value: "100mb"
+        - name: indices.memory.index_buffer_size
+          value: "20%"
+        - name: thread_pool.write.queue_size
+          value: "1000"
+        - name: thread_pool.search.queue_size
+          value: "10000"
+        
+        resources:
+          requests:
+            cpu: 2
+            memory: 8Gi
+          limits:
+            cpu: 4
+            memory: 8Gi
+        
+        ports:
+        - name: http
+          containerPort: 9200
+        - name: transport
+          containerPort: 9300
+        - name: metrics
+          containerPort: 9600
+        
+        livenessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+            scheme: HTTPS
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health?wait_for_status=green&timeout=1s
+            port: 9200
+            scheme: HTTPS
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+        
+        volumeMounts:
+        - name: opensearch-data
+          mountPath: /usr/share/opensearch/data
+        - name: opensearch-config
+          mountPath: /usr/share/opensearch/config/opensearch.yml
+          subPath: opensearch.yml
+        - name: opensearch-security-config
+          mountPath: /usr/share/opensearch/config/opensearch-security
+      
+      volumes:
+      - name: opensearch-config
+        configMap:
+          name: opensearch-config
+      - name: opensearch-security-config
+        secret:
+          secretName: opensearch-security-config
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: opensearch-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 200Gi
+
+---
+# OpenSearch Data Nodes
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch-data
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: data
+spec:
+  serviceName: opensearch-data-headless
+  replicas: 6
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch
+      app.kubernetes.io/component: data
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch
+        app.kubernetes.io/component: data
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9600"
+    spec:
+      serviceAccountName: opensearch
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["data"]
+            topologyKey: kubernetes.io/hostname
+      
+      initContainers:
+      - name: configure-sysctl
+        image: busybox:1.35
+        command: ['sh', '-c', 'sysctl -w vm.max_map_count=262144']
+        securityContext:
+          privileged: true
+      
+      containers:
+      - name: opensearch
+        image: opensearchproject/opensearch:2.11.0
+        imagePullPolicy: Always
+        
+        env:
+        - name: cluster.name
+          value: "neobank-opensearch"
+        - name: node.name
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: discovery.seed_hosts
+          value: "opensearch-master-headless"
+        - name: cluster.initial_master_nodes
+          value: "opensearch-master-0,opensearch-master-1,opensearch-master-2"
+        - name: node.roles
+          value: "data,ingest"
+        - name: bootstrap.memory_lock
+          value: "true"
+        - name: OPENSEARCH_JAVA_OPTS
+          value: "-Xms8g -Xmx8g"
+        - name: DISABLE_SECURITY_PLUGIN
+          value: "false"
+        
+        # Banking performance optimizations
+        - name: indices.fielddata.cache.size
+          value: "30%"
+        - name: indices.queries.cache.size
+          value: "20%"
+        - name: indices.requests.cache.size
+          value: "5%"
+        
+        resources:
+          requests:
+            cpu: 4
+            memory: 16Gi
+          limits:
+            cpu: 8
+            memory: 16Gi
+        
+        ports:
+        - name: http
+          containerPort: 9200
+        - name: transport
+          containerPort: 9300
+        - name: metrics
+          containerPort: 9600
+        
+        livenessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+            scheme: HTTPS
+          initialDelaySeconds: 90
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+            scheme: HTTPS
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        
+        volumeMounts:
+        - name: opensearch-data
+          mountPath: /usr/share/opensearch/data
+        - name: opensearch-config
+          mountPath: /usr/share/opensearch/config/opensearch.yml
+          subPath: opensearch.yml
+        - name: opensearch-security-config
+          mountPath: /usr/share/opensearch/config/opensearch-security
+      
+      volumes:
+      - name: opensearch-config
+        configMap:
+          name: opensearch-config
+      - name: opensearch-security-config
+        secret:
+          secretName: opensearch-security-config
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: opensearch-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 500Gi
+
+---
+# OpenSearch Coordinating Nodes
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-coordinating
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: coordinating
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch
+      app.kubernetes.io/component: coordinating
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch
+        app.kubernetes.io/component: coordinating
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9600"
+    spec:
+      serviceAccountName: opensearch
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+      
+      containers:
+      - name: opensearch
+        image: opensearchproject/opensearch:2.11.0
+        imagePullPolicy: Always
+        
+        env:
+        - name: cluster.name
+          value: "neobank-opensearch"
+        - name: node.name
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: discovery.seed_hosts
+          value: "opensearch-master-headless"
+        - name: cluster.initial_master_nodes
+          value: "opensearch-master-0,opensearch-master-1,opensearch-master-2"
+        - name: node.roles
+          value: ""  # Coordinating only
+        - name: bootstrap.memory_lock
+          value: "true"
+        - name: OPENSEARCH_JAVA_OPTS
+          value: "-Xms2g -Xmx2g"
+        - name: DISABLE_SECURITY_PLUGIN
+          value: "false"
+        
+        resources:
+          requests:
+            cpu: 1
+            memory: 4Gi
+          limits:
+            cpu: 2
+            memory: 4Gi
+        
+        ports:
+        - name: http
+          containerPort: 9200
+        - name: transport
+          containerPort: 9300
+        - name: metrics
+          containerPort: 9600
+        
+        livenessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+            scheme: HTTPS
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health?local=true
+            port: 9200
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        
+        volumeMounts:
+        - name: opensearch-config
+          mountPath: /usr/share/opensearch/config/opensearch.yml
+          subPath: opensearch.yml
+        - name: opensearch-security-config
+          mountPath: /usr/share/opensearch/config/opensearch-security
+      
+      volumes:
+      - name: opensearch-config
+        configMap:
+          name: opensearch-config
+      - name: opensearch-security-config
+        secret:
+          secretName: opensearch-security-config
+
+---
+# OpenSearch Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensearch-config
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: config
+data:
+  opensearch.yml: |
+    # Cluster Configuration
+    cluster.name: neobank-opensearch
+    network.host: 0.0.0.0
+    http.port: 9200
+    transport.port: 9300
+    
+    # Discovery Configuration
+    discovery.type: zen
+    discovery.zen.minimum_master_nodes: 2
+    discovery.zen.ping_timeout: 30s
+    discovery.zen.fd.ping_interval: 10s
+    discovery.zen.fd.ping_timeout: 60s
+    discovery.zen.fd.ping_retries: 5
+    
+    # Memory and Performance
+    bootstrap.memory_lock: true
+    indices.memory.index_buffer_size: 20%
+    indices.memory.min_index_buffer_size: 96mb
+    indices.fielddata.cache.size: 30%
+    indices.queries.cache.size: 20%
+    indices.requests.cache.size: 5%
+    
+    # Banking-specific optimizations
+    indices.recovery.max_bytes_per_sec: 100mb
+    cluster.routing.allocation.disk.threshold_enabled: true
+    cluster.routing.allocation.disk.watermark.low: 85%
+    cluster.routing.allocation.disk.watermark.high: 90%
+    cluster.routing.allocation.disk.watermark.flood_stage: 95%
+    
+    # Thread Pool Configuration
+    thread_pool:
+      write:
+        size: 8
+        queue_size: 1000
+      search:
+        size: 16
+        queue_size: 10000
+      get:
+        size: 8
+        queue_size: 1000
+      analyze:
+        size: 1
+        queue_size: 16
+      index:
+        size: 8
+        queue_size: 200
+    
+    # Security Configuration
+    plugins.security.ssl.transport.pemcert_filepath: certs/node.pem
+    plugins.security.ssl.transport.pemkey_filepath: certs/node-key.pem
+    plugins.security.ssl.transport.pemtrustedcas_filepath: certs/root-ca.pem
+    plugins.security.ssl.transport.enforce_hostname_verification: false
+    plugins.security.ssl.http.enabled: true
+    plugins.security.ssl.http.pemcert_filepath: certs/node.pem
+    plugins.security.ssl.http.pemkey_filepath: certs/node-key.pem
+    plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
+    plugins.security.allow_unsafe_democertificates: false
+    plugins.security.allow_default_init_securityindex: true
+    plugins.security.authcz.admin_dn:
+      - CN=admin,OU=client,O=client,L=test,C=de
+    plugins.security.audit.type: internal_opensearch
+    plugins.security.enable_snapshot_restore_privilege: true
+    plugins.security.check_snapshot_restore_write_privileges: true
+    plugins.security.restapi.roles_enabled: ["all_access", "security_rest_api_access"]
+    
+    # Banking Compliance Settings
+    action.auto_create_index: false
+    action.destructive_requires_name: true
+    cluster.blocks.delete_indices: false
+    
+    # Monitoring and Metrics
+    http.cors.enabled: true
+    http.cors.allow-origin: "*"
+    http.cors.allow-methods: OPTIONS, HEAD, GET, POST, PUT, DELETE
+    http.cors.allow-headers: X-Requested-With,X-Auth-Token,Content-Type,Content-Length
+
+---
+# OpenSearch Security Configuration Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opensearch-security-config
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: security
+type: Opaque
+data:
+  # Banking-specific roles and users configuration
+  roles.yml: |
+    YmFua2luZ19hZG1pbjoKICBjbHVzdGVyX3Blcm1pc3Npb25zOgogICAgLSAiY2x1c3Rlcl9hbGwiCiAgaW5kZXhfcGVybWlzc2lvbnM6CiAgICAtIGluZGV4X3BhdHRlcm5zOgogICAgICAgIC0gIioiCiAgICAgIGFsbG93ZWRfYWN0aW9uczoKICAgICAgICAtICJpbmRpY2VzX2FsbCIKCmJhbmtpbmdfYW5hbHlzdDoKICBjbHVzdGVyX3Blcm1pc3Npb25zOgogICAgLSAiY2x1c3Rlcl9tb25pdG9yIgogIGluZGV4X3Blcm1pc3Npb25zOgogICAgLSBpbmRleF9wYXR0ZXJuczoKICAgICAgICAtICJ0cmFuc2FjdGlvbnMtKiIKICAgICAgICAtICJmcmF1ZC0qIgogICAgICAgIC0gInNlY3VyaXR5LSoiCiAgICAgIGFsbG93ZWRfYWN0aW9uczoKICAgICAgICAtICJpbmRpY2VzX3JlYWQiCiAgICAgICAgLSAiaW5kaWNlc19zZWFyY2giCgpmcmF1ZF9kZXRlY3Rpb246CiAgY2x1c3Rlcl9wZXJtaXNzaW9uczoKICAgIC0gImNsdXN0ZXJfbW9uaXRvciIKICBpbmRleF9wZXJtaXNzaW9uczoKICAgIC0gaW5kZXhfcGF0dGVybnM6CiAgICAgICAgLSAiZnJhdWQtKiIKICAgICAgICAtICJ0cmFuc2FjdGlvbnMtKiIKICAgICAgYWxsb3dlZF9hY3Rpb25zOgogICAgICAgIC0gImluZGljZXNfYWxsIg==
+  
+  roles_mapping.yml: |
+    YmFua2luZ19hZG1pbjoKICBiYWNrZW5kX3JvbGVzOgogICAgLSAiYWRtaW4iCiAgdXNlcnM6CiAgICAtICJhZG1pbiIKCmJhbmtpbmdfYW5hbHlzdDoKICBiYWNrZW5kX3JvbGVzOgogICAgLSAiYW5hbHlzdCIKICB1c2VyczoKICAgIC0gImFuYWx5c3QiCgpmcmF1ZF9kZXRlY3Rpb246CiAgYmFja2VuZF9yb2xlczoKICAgIC0gImZyYXVkX2RldGVjdG9yIgogIHVzZXJzOgogICAgLSAiZnJhdWRfc2VydmljZSI=
+
+---
+# OpenSearch Credentials Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: opensearch-credentials
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: credentials
+type: Opaque
+data:
+  admin-password: TmVvQmFua09wZW5TZWFyY2hBZG1pbjIwMjQh  # NeoBank OpenSearch Admin 2024!
+  analyst-password: QW5hbHlzdFBhc3N3b3JkMjAyNCE=  # AnalystPassword2024!
+  fraud-password: RnJhdWREZXRlY3RvclBhc3MyMDI0IQ==  # FraudDetectorPass2024!
+
+---
+# Service Account for OpenSearch
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensearch
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+
+---
+# ClusterRole for OpenSearch
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensearch
+  labels:
+    app.kubernetes.io/name: opensearch
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "nodes/stats", "services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding for OpenSearch
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensearch
+  labels:
+    app.kubernetes.io/name: opensearch
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensearch
+subjects:
+- kind: ServiceAccount
+  name: opensearch
+  namespace: opensearch-system
+
+---
+# Headless Service for Master Nodes
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-master-headless
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: master
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: master
+  ports:
+  - name: http
+    port: 9200
+    targetPort: 9200
+  - name: transport
+    port: 9300
+    targetPort: 9300
+
+---
+# Headless Service for Data Nodes
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-data-headless
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: data
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: data
+  ports:
+  - name: http
+    port: 9200
+    targetPort: 9200
+  - name: transport
+    port: 9300
+    targetPort: 9300
+
+---
+# Load Balancer Service for Client Access
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-client
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: client
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9600"
+spec:
+  selector:
+    app.kubernetes.io/name: opensearch
+    app.kubernetes.io/component: coordinating
+  ports:
+  - name: http
+    port: 9200
+    targetPort: 9200
+  - name: metrics
+    port: 9600
+    targetPort: 9600
+  type: ClusterIP
+
+---
+# OpenSearch Dashboards Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch-dashboards
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch-dashboards
+    spec:
+      serviceAccountName: opensearch
+      
+      containers:
+      - name: opensearch-dashboards
+        image: opensearchproject/opensearch-dashboards:2.11.0
+        imagePullPolicy: Always
+        
+        env:
+        - name: OPENSEARCH_HOSTS
+          value: "https://opensearch-client:9200"
+        - name: SERVER_HOST
+          value: "0.0.0.0"
+        - name: SERVER_PORT
+          value: "5601"
+        - name: OPENSEARCH_USERNAME
+          value: "admin"
+        - name: OPENSEARCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: admin-password
+        
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2
+            memory: 4Gi
+        
+        ports:
+        - name: http
+          containerPort: 5601
+        
+        livenessProbe:
+          httpGet:
+            path: /api/status
+            port: 5601
+          initialDelaySeconds: 120
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /api/status
+            port: 5601
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        
+        volumeMounts:
+        - name: dashboards-config
+          mountPath: /usr/share/opensearch-dashboards/config/opensearch_dashboards.yml
+          subPath: opensearch_dashboards.yml
+      
+      volumes:
+      - name: dashboards-config
+        configMap:
+          name: opensearch-dashboards-config
+
+---
+# OpenSearch Dashboards Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensearch-dashboards-config
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+data:
+  opensearch_dashboards.yml: |
+    server.name: opensearch-dashboards
+    server.host: "0.0.0.0"
+    server.port: 5601
+    
+    opensearch.hosts: ["https://opensearch-client:9200"]
+    opensearch.ssl.verificationMode: none
+    opensearch.username: "admin"
+    opensearch.password: "${OPENSEARCH_PASSWORD}"
+    opensearch.requestHeadersAllowlist: ["securitytenant","Authorization"]
+    
+    opensearch_security.multitenancy.enabled: true
+    opensearch_security.multitenancy.tenants.preferred: ["Private", "Global"]
+    opensearch_security.readonly_mode.roles: ["kibana_read_only"]
+    
+    # Banking-specific dashboard settings
+    newsfeed.enabled: false
+    telemetry.optIn: false
+    telemetry.enabled: false
+    
+    # Custom branding for NeoBank
+    server.customResponseHeaders:
+      "X-Frame-Options": "SAMEORIGIN"
+      "X-Content-Type-Options": "nosniff"
+      "X-XSS-Protection": "1; mode=block"
+
+---
+# Service for OpenSearch Dashboards
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-dashboards
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+spec:
+  selector:
+    app.kubernetes.io/name: opensearch-dashboards
+  ports:
+  - name: http
+    port: 5601
+    targetPort: 5601
+  type: ClusterIP
+
+---
+# Ingress for OpenSearch Dashboards
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: opensearch-dashboards
+  namespace: opensearch-system
+  labels:
+    app.kubernetes.io/name: opensearch-dashboards
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - analytics.neobank.com
+    secretName: opensearch-dashboards-tls
+  rules:
+  - host: analytics.neobank.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: opensearch-dashboards
+            port:
+              number: 5601

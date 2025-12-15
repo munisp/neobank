@@ -1,0 +1,113 @@
+# netlify.toml - Production-ready configuration for NeoBank Services Frontend
+
+# ==============================================================================
+# 1. Build Settings
+# ==============================================================================
+# The 'build' section defines the build command and the directory to publish.
+[build]
+  # Replace with your actual build command (e.g., 'npm run build', 'yarn build')
+  command = "npm run build"
+  # Replace with the directory that contains the deploy-ready HTML files and assets
+  publish = "dist"
+  # Optional: Specify the base directory if your project is not in the root
+  # base = "frontend/"
+
+# ==============================================================================
+# 2. Environment Variables (Placeholders)
+# ==============================================================================
+# Environment variables should be managed securely in the Netlify UI or CLI.
+# DO NOT commit sensitive values here. These are placeholders for clarity.
+# [build.environment]
+#   VITE_API_BASE_URL = "https://api.neobank.com/v1"
+#   VITE_FEATURE_FLAG_A = "true"
+#   # Sensitive variables like API keys or secrets MUST be set in the Netlify UI.
+#   # NEOBANK_SECRET_KEY = "set-in-netlify-ui"
+
+# ==============================================================================
+# 3. Redirects (SPA Routing and Security)
+# ==============================================================================
+# Netlify automatically handles HTTP to HTTPS and www to non-www redirects.
+# The '[[redirects]]' section is used for custom routing and rewrites.
+
+# Single Page Application (SPA) Routing:
+# This rule ensures that all non-file requests are routed to index.html,
+# allowing client-side routing to take over.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Optional: A specific redirect for a legacy path
+# [[redirects]]
+#   from = "/old-login"
+#   to = "/auth/login"
+#   status = 301
+
+# ==============================================================================
+# 4. Custom Headers (Security and Caching)
+# ==============================================================================
+# The '[[headers]]' section is crucial for security and performance.
+
+# Global Security Headers for all paths
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # HSTS: Enforces secure connections (HTTPS) for a long period. CRITICAL for financial apps.
+    Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
+    # XSS Protection: Modern browsers ignore this, but good for legacy support.
+    X-XSS-Protection = "1; mode=block"
+    # Clickjacking Protection: Prevents the site from being loaded in an iframe.
+    X-Frame-Options = "DENY"
+    # MIME Sniffing Protection: Prevents the browser from interpreting files as a different MIME type.
+    X-Content-Type-Options = "nosniff"
+    # Referrer Policy: Controls how much referrer information is sent with requests.
+    Referrer-Policy = "no-referrer-when-downgrade"
+    # Feature Policy (Permissions Policy): Controls browser features and APIs.
+    Permissions-Policy = "geolocation=(), midi=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), fullscreen=(self), payment=()"
+
+# Content Security Policy (CSP) - Highly Recommended for financial apps
+# This is a strict, production-ready CSP. Adjust 'default-src' and 'connect-src' as needed.
+# Note: CSP is complex and must be tailored to your application's exact needs.
+# Use a tool to generate and test your final CSP.
+# Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.neobank.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';"
+
+# Caching Headers for HTML (Short cache time for revalidation)
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Caching Headers for Static Assets (Long cache time for performance)
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# ==============================================================================
+# 5. Edge Functions
+# ==============================================================================
+# Edge Functions are used for dynamic logic at the edge (CDN).
+# This example shows a function for basic authentication or feature flagging.
+# The function file (e.g., 'netlify/edge-functions/auth-check.js') must exist.
+[[edge_functions]]
+  function = "auth-check"
+  path = "/app/*"
+  # Optional: Set a specific deployment context (e.g., 'production')
+  # excluded_paths = ["/app/public/*"]
+
+# ==============================================================================
+# 6. Context-Specific Settings
+# ==============================================================================
+# Settings can be overridden for different deployment contexts (e.g., 'branch-deploy', 'deploy-preview').
+
+# [context.production]
+#   # Optional: Override the publish directory for production if needed
+#   # publish = "dist-prod"
+
+# [context.branch-deploy]
+#   # Example: Use a different build command for branch deploys
+#   # command = "npm run build:staging"
+
+# [context.deploy-preview]
+#   # Example: Disable edge functions for deploy previews
+#   # edge_functions = []

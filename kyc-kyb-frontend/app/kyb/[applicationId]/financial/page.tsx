@@ -1,0 +1,271 @@
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { toast } from 'sonner';
+import { ArrowLeft, Loader2 } from 'lucide-react';
+
+// Local Imports
+import {
+  financialInfoSchema,
+  FinancialInfoSchema,
+  KYB_STEPS,
+  KYB_STEP_FINANCIAL,
+} from '@/lib/validations/kyb-schema';
+import kybService from '@/lib/api/kyb-service';
+
+// UI Components
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+
+// Shared Components
+import StatusTracker from '@/components/shared/status-tracker';
+
+// Define available currencies for the Select component
+const CURRENCIES = [
+  { value: 'NGN', label: 'Nigerian Naira (NGN)' },
+  { value: 'USD', label: 'US Dollar (USD)' },
+  { value: 'EUR', label: 'Euro (EUR)' },
+  { value: 'GBP', label: 'British Pound (GBP)' },
+];
+
+// Define the type for the page component props
+interface FinancialPageProps {
+  params: {
+    applicationId: string;
+  };
+}
+
+/**
+ * Financial Information Page Component for KYB flow.
+ * Allows the user to input financial details for the business.
+ */
+export default function FinancialPage({ params }: FinancialPageProps) {
+  const { applicationId } = params;
+  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(false);
+
+  // 1. Initialize the form with zodResolver
+  const form = useForm<FinancialInfoSchema>({
+    resolver: zodResolver(financialInfoSchema),
+    defaultValues: {
+      annualRevenue: 0,
+      currency: 'USD', // Default to USD
+      numberOfEmployees: 1,
+      expectedMonthlyTransactionVolume: 0,
+      sourceOfFunds: '',
+    },
+  });
+
+  // 2. Define the form submission handler
+  async function onSubmit(values: FinancialInfoSchema) {
+    setIsLoading(true);
+    try {
+      // Convert number fields from string to number if necessary (though Input type="number" helps)
+      const payload = {
+        ...values,
+        annualRevenue: Number(values.annualRevenue),
+        numberOfEmployees: Number(values.numberOfEmployees),
+        expectedMonthlyTransactionVolume: Number(values.expectedMonthlyTransactionVolume),
+      };
+
+      await kybService.submitFinancialInfo(applicationId, payload);
+
+      toast.success('Financial information saved successfully!', {
+        description: 'You will now be redirected to the next step.',
+      });
+
+      // 3. Navigate to the next step (status page as per requirement)
+      router.push(`/kyb/${applicationId}/status`);
+    } catch (error) {
+      console.error('Financial Info Submission Error:', error);
+      toast.error('Failed to save financial information.', {
+        description:
+          error instanceof Error ? error.message : 'An unexpected error occurred. Please try again.',
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  // Helper function for navigation
+  const handleBack = () => {
+    // Navigate back to the previous step (e.g., business-details)
+    router.push(`/kyb/${applicationId}/business-details`);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-12">
+      <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
+        {/* Status Tracker */}
+        <StatusTracker steps={KYB_STEPS} currentStep={KYB_STEP_FINANCIAL} />
+
+        <Card className="mt-8">
+          <CardHeader>
+            <CardTitle className="text-2xl font-bold">Financial Information</CardTitle>
+            <CardDescription>
+              Please provide the financial details for your business. This information is required for regulatory compliance.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                {/* Annual Revenue Field */}
+                <FormField
+                  control={form.control}
+                  name="annualRevenue"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Annual Revenue</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="e.g., 500000"
+                          {...field}
+                          onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : 0)}
+                          disabled={isLoading}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        The total revenue generated by your business in the last fiscal year.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Currency Field */}
+                <FormField
+                  control={form.control}
+                  name="currency"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Currency</FormLabel>
+                      <Select onValueChange={field.onChange} defaultValue={field.value} disabled={isLoading}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a currency" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {CURRENCIES.map((currency) => (
+                            <SelectItem key={currency.value} value={currency.value}>
+                              {currency.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Number of Employees Field */}
+                <FormField
+                  control={form.control}
+                  name="numberOfEmployees"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Number of Employees</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="e.g., 10"
+                          {...field}
+                          onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : 1)}
+                          disabled={isLoading}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Expected Monthly Transaction Volume Field */}
+                <FormField
+                  control={form.control}
+                  name="expectedMonthlyTransactionVolume"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Expected Monthly Transaction Volume (in selected currency)</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="e.g., 10000"
+                          {...field}
+                          onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : 0)}
+                          disabled={isLoading}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        The estimated total value of transactions processed by your business each month.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Source of Funds Field */}
+                <FormField
+                  control={form.control}
+                  name="sourceOfFunds"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Source of Funds</FormLabel>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Briefly describe the primary source of your business's operating funds (e.g., retained earnings, venture capital, bank loans)."
+                          className="resize-y"
+                          {...field}
+                          disabled={isLoading}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Navigation Buttons */}
+                <div className="flex justify-between pt-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleBack}
+                    disabled={isLoading}
+                  >
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    Back
+                  </Button>
+                  <Button type="submit" disabled={isLoading}>
+                    {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Continue
+                  </Button>
+                </div>
+              </form>
+            </Form>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}

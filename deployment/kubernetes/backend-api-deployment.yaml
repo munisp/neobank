@@ -1,0 +1,148 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-api-config
+  labels:
+    app: backend-api
+    environment: production
+data:
+  # Example configuration variables
+  LOG_LEVEL: "info"
+  API_PORT: "8080"
+  FEATURE_TOGGLE_ENABLED: "true"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-api-secret
+  labels:
+    app: backend-api
+    environment: production
+type: Opaque
+data:
+  # Sensitive data should be base64 encoded.
+  # Example: DATABASE_PASSWORD: "supersecretpassword" -> c3VwZXJzZWNyZXRwYXNzd29yZA==
+  DATABASE_PASSWORD: "c3VwZXJzZWNyZXRwYXNzd29yZA=="
+  API_KEY: "YWJjZGVmMTIzNDU2" # Example: "abcdef123456"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api-deployment
+  labels:
+    app: backend-api
+    environment: production
+  annotations:
+    # Annotations for monitoring (Prometheus) and logging
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+    logging/driver: "json-file"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: backend-api
+  template:
+    metadata:
+      labels:
+        app: backend-api
+        environment: production
+    spec:
+      # Pod Security Context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001 # Example non-root user ID
+        fsGroup: 10001
+      containers:
+      - name: backend-api-container
+        image: my-registry/backend-api:v1.0.0 # Placeholder image: REPLACE ME
+        ports:
+        - containerPort: 8080
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            # Requests equal to limits for guaranteed QoS
+            cpu: "500m"
+            memory: "512Mi"
+        # Health Checks
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        # Container Security Context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        # Environment Variables from ConfigMap and Secret
+        envFrom:
+        - configMapRef:
+            name: backend-api-config
+        - secretRef:
+            name: backend-api-secret
+        # Volume mount for logs/temp files due to readOnlyRootFilesystem
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-api-service
+  labels:
+    app: backend-api
+    environment: production
+spec:
+  type: ClusterIP
+  selector:
+    app: backend-api
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080 # Container port
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-api-hpa
+  labels:
+    app: backend-api
+    environment: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-api-deployment
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70 # Target 70% CPU utilization
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80 # Target 80% Memory utilization

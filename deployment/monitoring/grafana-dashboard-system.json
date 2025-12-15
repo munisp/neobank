@@ -1,0 +1,138 @@
+{
+  "dashboard": {
+    "title": "NeoBank System Overview",
+    "tags": ["neobank", "system", "overview"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "API Request Rate",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{job='neobank-backend'}[5m])",
+            "legendFormat": "{{method}} {{endpoint}}"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "title": "API Latency (p95)",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job='neobank-backend'}[5m]))",
+            "legendFormat": "{{endpoint}}"
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Error Rate",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{job='neobank-backend',status=~'5..'}[5m])",
+            "legendFormat": "{{status}} {{endpoint}}"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "title": "CPU Usage",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total{job='neobank-backend'}[5m]) * 100",
+            "legendFormat": "{{instance}}"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Memory Usage",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes{job='neobank-backend'} / 1024 / 1024",
+            "legendFormat": "{{instance}} (MB)"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Active Connections",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "http_active_connections{job='neobank-backend'}",
+            "legendFormat": "{{instance}}"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "TigerBeetle Transfer Rate",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(tigerbeetle_transfers_total[5m])",
+            "legendFormat": "Ledger {{ledger}}"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "TigerBeetle Latency",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 24, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, rate(tigerbeetle_transfer_latency_seconds_bucket[5m]))",
+            "legendFormat": "p99"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Database Connections",
+        "type": "graph",
+        "gridPos": {"x": 0, "y": 32, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "database_connections_active{job='postgresql'}",
+            "legendFormat": "Active"
+          },
+          {
+            "expr": "database_connections_idle{job='postgresql'}",
+            "legendFormat": "Idle"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Kafka Message Rate",
+        "type": "graph",
+        "gridPos": {"x": 12, "y": 32, "w": 12, "h": 8},
+        "targets": [
+          {
+            "expr": "rate(kafka_messages_consumed_total[5m])",
+            "legendFormat": "{{topic}}"
+          }
+        ]
+      }
+    ],
+    "refresh": "10s",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    }
+  }
+}

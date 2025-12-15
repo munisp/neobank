@@ -1,0 +1,104 @@
+# render.yaml - Render Blueprint for NeoBank Application
+# This blueprint defines all services for the NeoBank application:
+# - Backend: Web Service (e.g., Python/Flask, Node/Express)
+# - Frontend: Web Service (e.g., React, Vue)
+# - PWA: Static Site (for the Progressive Web App assets)
+# - neobank-db: PostgreSQL Database
+# - neobank-redis: Key Value Store (Redis)
+
+services:
+  # 1. Backend Web Service (API)
+  - type: web
+    name: neobank-backend
+    env: python # Assuming a Python backend, e.g., Django/Flask
+    repo: YOUR_BACKEND_GIT_REPO_URL # **UPDATE THIS**
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app # Example for Gunicorn, adjust as needed
+    plan: standard # Production-ready plan
+    autoDeploy: yes # Auto-deploy from Git
+    healthCheckPath: /health # Standard health check endpoint
+    domains:
+      - api.neobank.com # Custom domain for the API
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: neobank-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: neobank-redis
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true # Generate a secure secret key
+      - fromGroup: neobank-prod-secrets # Environment group for production secrets
+
+  # 2. Frontend Web Service (Main App)
+  - type: web
+    name: neobank-frontend
+    env: node # Assuming a Node.js-based frontend, e.g., Next.js, Nuxt.js
+    repo: YOUR_FRONTEND_GIT_REPO_URL # **UPDATE THIS**
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start # Adjust for your specific framework
+    plan: standard
+    autoDeploy: yes
+    domains:
+      - neobank.com # Main custom domain
+      - www.neobank.com
+    envVars:
+      - key: API_BASE_URL
+        fromService:
+          name: neobank-backend
+          property: url # Reference the backend service URL
+      - fromGroup: neobank-prod-secrets
+
+  # 3. PWA Static Site (for static assets/PWA shell)
+  # Using a static site for the PWA shell/assets is often more performant.
+  - type: static
+    name: neobank-pwa-assets
+    repo: YOUR_PWA_GIT_REPO_URL # **UPDATE THIS**
+    branch: main
+    buildCommand: npm install && npm run build:pwa
+    staticPublishPath: ./dist # Adjust to your build output directory
+    autoDeploy: yes
+    domains:
+      - pwa.neobank.com # Custom domain for PWA assets/shell
+    envVars:
+      - fromGroup: neobank-prod-secrets
+
+  # 4. Redis Key Value Store (Private Service)
+  - type: keyvalue
+    name: neobank-redis
+    plan: starter # Adjust plan as needed
+    maxmemoryPolicy: allkeys-lru # Standard caching policy
+    ipAllowList:
+      - source: 0.0.0.0/0 # Allow connections from all Render services
+
+databases:
+  # 5. PostgreSQL Database
+  - name: neobank-db
+    databaseName: neobank_prod
+    user: neobank_user
+    plan: standard # Production-ready plan
+    highAvailability:
+      enabled: true # Enable HA for production
+    diskSizeGB: 50 # Adjust size as needed
+    ipAllowList:
+      - source: 0.0.0.0/0 # Allow connections from all Render services
+
+envVarGroups:
+  # Environment group for shared production secrets and configuration
+  - name: neobank-prod-secrets
+    envVars:
+      - key: STRIPE_SECRET_KEY
+        sync: false # Prompt for value in the Render Dashboard
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production

@@ -1,0 +1,198 @@
+pipeline {
+    // 1. Agent: Use a Docker agent for consistency and to ensure all necessary tools (like docker, kubectl, trivy) are available.
+    // The agent should be configured on the Jenkins node to have access to the Docker daemon (e.g., via /var/run/docker.sock)
+    agent {
+        docker {
+            image 'jenkins/jnlp-slave:latest' // Placeholder, a custom agent with all tools is recommended
+            args '-v /var/run/docker.sock:/var/run/docker.sock'
+        }
+    }
+
+    // 2. Environment Variables: Define common variables
+    environment {
+        // Application and Registry details
+        DOCKER_REGISTRY = 'your-docker-registry.com' // e.g., registry.hub.docker.com or ECR/GCR
+        IMAGE_NAME = "my-app"
+        // Kubernetes details
+        KUBE_CONFIG_CREDENTIALS = 'kubeconfig-credential-id' // Jenkins secret text credential ID for Kubeconfig
+        KUBE_NAMESPACE_STAGING = 'staging'
+        KUBE_NAMESPACE_PRODUCTION = 'production'
+        // Security Scanning
+        TRIVY_SEVERITY = 'HIGH,CRITICAL'
+    }
+
+    // 3. Options: Configure pipeline behavior
+    options {
+        // Cache optimization: Use the 'skipDefaultCheckout' to manage checkout manually for better control
+        skipDefaultCheckout()
+        // Timeouts for stages
+        timeout(time: 1, unit: 'HOURS')
+        // Discard old builds
+        buildDiscarder(logRotator(daysToKeepStr: '30', numToKeepStr: '10'))
+    }
+
+    // 4. Parameters: Allow manual triggering with environment selection
+    parameters {
+        string(name: 'TAG_NAME', defaultValue: "latest", description: 'Docker image tag to build/deploy')
+        choice(name: 'TARGET_ENV', choices: ['staging', 'production'], description: 'Select the environment to deploy to')
+    }
+
+    // 5. Stages: Multi-stage pipeline (Test, Build, Security Scan, Deploy)
+    stages {
+        // Stage 1: Checkout and Cache Restoration
+        stage('Prepare Workspace') {
+            steps {
+                // Cache optimization: Restore dependencies cache
+                // Assumes a 'node_modules' or similar directory for caching
+                // Requires 'cache' plugin or a custom shared library function
+                script {
+                    // Example using a custom function or shell for cache
+                    echo "Restoring cache (e.g., node_modules or maven repo)"
+                    // Example: sh 'restore-cache.sh'
+                }
+                // Checkout SCM
+                checkout scm
+            }
+        }
+
+        // Stage 2: Automated Testing
+        stage('Test') {
+            steps {
+                echo "Running unit and integration tests..."
+                // Example: sh 'npm test' or 'mvn test'
+                // Ensure test reports are published for Jenkins to track
+                // junit '**/target/surefire-reports/*.xml'
+            }
+        }
+
+        // Stage 3: Docker Build and Push
+        stage('Build & Push') {
+            steps {
+                script {
+                    // Calculate the full image tag
+                    def fullImageTag = "${DOCKER_REGISTRY}/${IMAGE_NAME}:${params.TAG_NAME}"
+                    
+                    // Build the Docker image
+                    echo "Building Docker image: ${fullImageTag}"
+                    docker.build(fullImageTag, '.')
+                    
+                    // Push the Docker image to the registry
+                    // Assumes a Jenkins credential ID 'docker-registry-credential' is configured
+                    withCredentials([usernamePassword(credentialsId: 'docker-registry-credential', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                        docker.withRegistry("https://${DOCKER_REGISTRY}", 'docker-registry-credential') {
+                            echo "Pushing Docker image: ${fullImageTag}"
+                            docker.image(fullImageTag).push()
+                        }
+                    }
+                    
+                    // Set the full image tag as an environment variable for later stages
+                    env.FULL_IMAGE_TAG = fullImageTag
+                }
+            }
+        }
+
+        // Stage 4: Security Scanning
+        stage('Security Scan') {
+            steps {
+                echo "Running security scan on image: ${env.FULL_IMAGE_TAG}"
+                // 8. Security scanning: Using Trivy (container image scanner) as an example
+                // Requires Trivy to be installed on the agent or run as a separate container
+                sh "trivy image --severity ${TRIVY_SEVERITY} --exit-code 1 ${env.FULL_IMAGE_TAG}"
+                
+                // Other scans (e.g., SonarQube, Dependency-Check) can be added here
+            }
+        }
+
+        // Stage 5: Environment-Specific Deployment
+        stage('Deploy') {
+            // Parallel deployment to Staging and Production (conditional)
+            parallel {
+                // Sub-stage 5a: Staging Deployment
+                stage('Deploy to Staging') {
+                    when {
+                        expression { return params.TARGET_ENV == 'staging' }
+                    }
+                    steps {
+                        script {
+                            echo "Deploying ${env.FULL_IMAGE_TAG} to Staging (${KUBE_NAMESPACE_STAGING})"
+                            
+                            // 5. Kubernetes deployment: Use 'withKubeConfig' for secure access
+                            withKubeConfig([credentialsId: env.KUBE_CONFIG_CREDENTIALS]) {
+                                // Apply Kubernetes manifest (e.g., deployment.yaml)
+                                sh "kubectl apply -f k8s/deployment-staging.yaml -n ${KUBE_NAMESPACE_STAGING}"
+                                // Update the image tag in the deployment
+                                sh "kubectl set image deployment/my-app-staging my-app=${env.FULL_IMAGE_TAG} -n ${KUBE_NAMESPACE_STAGING}"
+                                // Wait for rollout to complete
+                                sh "kubectl rollout status deployment/my-app-staging -n ${KUBE_NAMESPACE_STAGING}"
+                            }
+                        }
+                    }
+                }
+
+                // Sub-stage 5b: Production Deployment (Manual approval gate)
+                stage('Deploy to Production') {
+                    when {
+                        expression { return params.TARGET_ENV == 'production' }
+                    }
+                    steps {
+                        // Manual approval gate before production deployment
+                        input {
+                            message "Proceed to Production deployment for ${env.FULL_IMAGE_TAG}?"
+                            ok "Deploy to Production"
+                        }
+                        
+                        script {
+                            echo "Deploying ${env.FULL_IMAGE_TAG} to Production (${KUBE_NAMESPACE_PRODUCTION})"
+                            
+                            // 5. Kubernetes deployment: Use 'withKubeConfig' for secure access
+                            withKubeConfig([credentialsId: env.KUBE_CONFIG_CREDENTIALS]) {
+                                // Apply Kubernetes manifest (e.g., deployment.yaml)
+                                sh "kubectl apply -f k8s/deployment-production.yaml -n ${KUBE_NAMESPACE_PRODUCTION}"
+                                // Update the image tag in the deployment
+                                sh "kubectl set image deployment/my-app-production my-app=${env.FULL_IMAGE_TAG} -n ${KUBE_NAMESPACE_PRODUCTION}"
+                                // Wait for rollout to complete
+                                sh "kubectl rollout status deployment/my-app-production -n ${KUBE_NAMESPACE_PRODUCTION}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. Post-build Actions: Notifications and Rollback
+    post {
+        always {
+            // Cache optimization: Save dependencies cache
+            script {
+                echo "Saving cache (e.g., node_modules or maven repo)"
+                // Example: sh 'save-cache.sh'
+            }
+        }
+        success {
+            // 7. Notifications on success
+            echo "Pipeline Succeeded! Image ${env.FULL_IMAGE_TAG} deployed to ${params.TARGET_ENV}."
+            // Example: slackSend channel: '#devops-notifications', message: "SUCCESS: ${env.JOB_NAME} build ${env.BUILD_NUMBER} deployed to ${params.TARGET_ENV}"
+        }
+        failure {
+            // 7. Notifications on failure
+            echo "Pipeline Failed!"
+            // Example: slackSend channel: '#devops-notifications', message: "FAILURE: ${env.JOB_NAME} build ${env.BUILD_NUMBER} failed."
+            
+            // 6. Rollback capabilities (Simplified example: trigger a rollback job)
+            script {
+                if (params.TARGET_ENV == 'production') {
+                    echo "Attempting automated rollback for Production..."
+                    // In a real-world scenario, this would trigger a job to deploy the last known good image tag
+                    // Example: build job: 'rollback-job', parameters: [string(name: 'ENV', value: 'production')]
+                }
+            }
+        }
+        unstable {
+            echo "Pipeline finished with unstable results (e.g., some tests failed)."
+        }
+        aborted {
+            echo "Pipeline was manually aborted."
+        }
+    }
+}

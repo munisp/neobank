@@ -617,12 +617,210 @@ class LakehouseService:
             logger.error("table_creation_failed", table="telecom_purchases", error=str(e))
             return False
 
+    async def create_escrow_table(self) -> bool:
+        """Create escrow transactions table"""
+        try:
+            schema = Schema(
+                NestedField(1, "escrow_id", StringType(), required=True),
+                NestedField(2, "buyer_id", StringType(), required=True),
+                NestedField(3, "seller_id", StringType(), required=True),
+                NestedField(4, "escrow_type", StringType(), required=True),
+                NestedField(5, "title", StringType(), required=True),
+                NestedField(6, "amount", DecimalType(18, 2), required=True),
+                NestedField(7, "currency", StringType(), required=True),
+                NestedField(8, "status", StringType(), required=True),
+                NestedField(9, "fee_percentage", DoubleType()),
+                NestedField(10, "fee_amount", DecimalType(18, 2)),
+                NestedField(11, "is_multiparty", BooleanType()),
+                NestedField(12, "total_parties", IntegerType()),
+                NestedField(13, "total_buyers", IntegerType()),
+                NestedField(14, "total_sellers", IntegerType()),
+                NestedField(15, "funded_at", TimestampType()),
+                NestedField(16, "released_at", TimestampType()),
+                NestedField(17, "created_at", TimestampType(), required=True),
+                NestedField(18, "updated_at", TimestampType(), required=True)
+            )
+            
+            partition_spec = PartitionSpec(
+                PartitionField(source_id=17, field_id=1000, transform=DayTransform(), name="day")
+            )
+            
+            if self.catalog:
+                self.catalog.create_table(f"{self.namespace}.escrow_transactions", schema=schema, partition_spec=partition_spec)
+                logger.info("table_created", table="escrow_transactions")
+                return True
+            return False
+        except Exception as e:
+            logger.error("table_creation_failed", table="escrow_transactions", error=str(e))
+            return False
+
+    async def create_user_dimension_table(self) -> bool:
+        """Create user/customer dimension table for AI/ML"""
+        try:
+            schema = Schema(
+                NestedField(1, "user_id", StringType(), required=True),
+                NestedField(2, "customer_type", StringType(), required=True),
+                NestedField(3, "kyc_tier", StringType()),
+                NestedField(4, "kyc_status", StringType()),
+                NestedField(5, "country", StringType()),
+                NestedField(6, "city", StringType()),
+                NestedField(7, "age_group", StringType()),
+                NestedField(8, "account_age_days", IntegerType()),
+                NestedField(9, "total_accounts", IntegerType()),
+                NestedField(10, "primary_currency", StringType()),
+                NestedField(11, "risk_score", DoubleType()),
+                NestedField(12, "lifetime_transaction_count", IntegerType()),
+                NestedField(13, "lifetime_transaction_volume", DecimalType(18, 2)),
+                NestedField(14, "avg_transaction_amount", DecimalType(18, 2)),
+                NestedField(15, "last_transaction_date", TimestampType()),
+                NestedField(16, "is_active", BooleanType()),
+                NestedField(17, "created_at", TimestampType(), required=True),
+                NestedField(18, "updated_at", TimestampType(), required=True)
+            )
+            
+            if self.catalog:
+                self.catalog.create_table(f"{self.namespace}.user_dimension", schema=schema)
+                logger.info("table_created", table="user_dimension")
+                return True
+            return False
+        except Exception as e:
+            logger.error("table_creation_failed", table="user_dimension", error=str(e))
+            return False
+
+    async def create_feature_store_table(self) -> bool:
+        """Create feature store table for ML models"""
+        try:
+            schema = Schema(
+                NestedField(1, "feature_id", StringType(), required=True),
+                NestedField(2, "user_id", StringType(), required=True),
+                NestedField(3, "feature_date", TimestampType(), required=True),
+                # Transaction features
+                NestedField(4, "txn_count_1d", IntegerType()),
+                NestedField(5, "txn_count_7d", IntegerType()),
+                NestedField(6, "txn_count_30d", IntegerType()),
+                NestedField(7, "txn_volume_1d", DecimalType(18, 2)),
+                NestedField(8, "txn_volume_7d", DecimalType(18, 2)),
+                NestedField(9, "txn_volume_30d", DecimalType(18, 2)),
+                NestedField(10, "avg_txn_amount_7d", DecimalType(18, 2)),
+                NestedField(11, "max_txn_amount_30d", DecimalType(18, 2)),
+                # Behavioral features
+                NestedField(12, "unique_merchants_7d", IntegerType()),
+                NestedField(13, "unique_countries_30d", IntegerType()),
+                NestedField(14, "login_count_7d", IntegerType()),
+                NestedField(15, "failed_txn_rate_30d", DoubleType()),
+                # Risk features
+                NestedField(16, "fraud_score", DoubleType()),
+                NestedField(17, "credit_score", DoubleType()),
+                NestedField(18, "churn_probability", DoubleType()),
+                # Product usage
+                NestedField(19, "has_savings", BooleanType()),
+                NestedField(20, "has_investments", BooleanType()),
+                NestedField(21, "has_loans", BooleanType()),
+                NestedField(22, "has_insurance", BooleanType()),
+                NestedField(23, "product_count", IntegerType()),
+                NestedField(24, "created_at", TimestampType(), required=True)
+            )
+            
+            partition_spec = PartitionSpec(
+                PartitionField(source_id=3, field_id=1000, transform=DayTransform(), name="day")
+            )
+            
+            if self.catalog:
+                self.catalog.create_table(f"{self.namespace}.feature_store", schema=schema, partition_spec=partition_spec)
+                logger.info("table_created", table="feature_store")
+                return True
+            return False
+        except Exception as e:
+            logger.error("table_creation_failed", table="feature_store", error=str(e))
+            return False
+
+    async def create_ml_labels_table(self) -> bool:
+        """Create ML labels/ground truth table for model training"""
+        try:
+            schema = Schema(
+                NestedField(1, "label_id", StringType(), required=True),
+                NestedField(2, "user_id", StringType(), required=True),
+                NestedField(3, "reference_id", StringType()),
+                NestedField(4, "label_type", StringType(), required=True),
+                # Fraud labels
+                NestedField(5, "is_fraud", BooleanType()),
+                NestedField(6, "fraud_type", StringType()),
+                NestedField(7, "fraud_confirmed_at", TimestampType()),
+                # Loan labels
+                NestedField(8, "loan_defaulted", BooleanType()),
+                NestedField(9, "days_past_due", IntegerType()),
+                NestedField(10, "default_amount", DecimalType(18, 2)),
+                # Churn labels
+                NestedField(11, "churned", BooleanType()),
+                NestedField(12, "churn_date", TimestampType()),
+                NestedField(13, "days_inactive_before_churn", IntegerType()),
+                # Dispute labels
+                NestedField(14, "dispute_outcome", StringType()),
+                NestedField(15, "dispute_resolved_in_favor", StringType()),
+                # KYC labels
+                NestedField(16, "kyc_rejected", BooleanType()),
+                NestedField(17, "kyc_rejection_reason", StringType()),
+                NestedField(18, "label_source", StringType()),
+                NestedField(19, "created_at", TimestampType(), required=True),
+                NestedField(20, "updated_at", TimestampType(), required=True)
+            )
+            
+            partition_spec = PartitionSpec(
+                PartitionField(source_id=19, field_id=1000, transform=DayTransform(), name="day")
+            )
+            
+            if self.catalog:
+                self.catalog.create_table(f"{self.namespace}.ml_labels", schema=schema, partition_spec=partition_spec)
+                logger.info("table_created", table="ml_labels")
+                return True
+            return False
+        except Exception as e:
+            logger.error("table_creation_failed", table="ml_labels", error=str(e))
+            return False
+
+    async def create_audit_events_table(self) -> bool:
+        """Create audit/auth events table for security analytics"""
+        try:
+            schema = Schema(
+                NestedField(1, "event_id", StringType(), required=True),
+                NestedField(2, "user_id", StringType()),
+                NestedField(3, "event_type", StringType(), required=True),
+                NestedField(4, "event_action", StringType(), required=True),
+                NestedField(5, "resource_type", StringType()),
+                NestedField(6, "resource_id", StringType()),
+                NestedField(7, "ip_address", StringType()),
+                NestedField(8, "user_agent", StringType()),
+                NestedField(9, "device_id", StringType()),
+                NestedField(10, "device_type", StringType()),
+                NestedField(11, "country", StringType()),
+                NestedField(12, "city", StringType()),
+                NestedField(13, "success", BooleanType(), required=True),
+                NestedField(14, "failure_reason", StringType()),
+                NestedField(15, "risk_score", DoubleType()),
+                NestedField(16, "session_id", StringType()),
+                NestedField(17, "timestamp", TimestampType(), required=True)
+            )
+            
+            partition_spec = PartitionSpec(
+                PartitionField(source_id=17, field_id=1000, transform=DayTransform(), name="day")
+            )
+            
+            if self.catalog:
+                self.catalog.create_table(f"{self.namespace}.audit_events", schema=schema, partition_spec=partition_spec)
+                logger.info("table_created", table="audit_events")
+                return True
+            return False
+        except Exception as e:
+            logger.error("table_creation_failed", table="audit_events", error=str(e))
+            return False
+
     async def initialize_all_tables(self) -> Dict[str, bool]:
         """Initialize all Lakehouse tables"""
         results = {}
         
         await self.create_namespace()
         
+        # Core banking tables
         results["transactions_fact"] = await self.create_transactions_table()
         results["accounts_dimension"] = await self.create_accounts_table()
         results["fraud_events"] = await self.create_fraud_events_table()
@@ -635,6 +833,15 @@ class LakehouseService:
         results["bnpl_orders"] = await self.create_bnpl_table()
         results["rewards_events"] = await self.create_rewards_table()
         results["telecom_purchases"] = await self.create_telecom_table()
+        
+        # Escrow table
+        results["escrow_transactions"] = await self.create_escrow_table()
+        
+        # AI/ML tables
+        results["user_dimension"] = await self.create_user_dimension_table()
+        results["feature_store"] = await self.create_feature_store_table()
+        results["ml_labels"] = await self.create_ml_labels_table()
+        results["audit_events"] = await self.create_audit_events_table()
         
         logger.info("tables_initialized", results=results)
         return results
@@ -890,6 +1097,153 @@ class LakehouseService:
             return await self.append_data("telecom_purchases", transformed)
         except Exception as e:
             logger.error("telecom_ingestion_failed", error=str(e))
+            return False
+
+    async def ingest_escrow_transaction(self, escrow: Dict[str, Any]) -> bool:
+        """Ingest escrow transaction into Lakehouse"""
+        try:
+            transformed = [{
+                "escrow_id": escrow.get("id"),
+                "buyer_id": escrow.get("buyer_id"),
+                "seller_id": escrow.get("seller_id"),
+                "escrow_type": escrow.get("type"),
+                "title": escrow.get("title"),
+                "amount": Decimal(str(escrow.get("amount", 0))),
+                "currency": escrow.get("currency", "NGN"),
+                "status": escrow.get("status", "pending"),
+                "fee_percentage": float(escrow.get("fee_percentage", 0)) if escrow.get("fee_percentage") else None,
+                "fee_amount": Decimal(str(escrow.get("fee_amount", 0))) if escrow.get("fee_amount") else None,
+                "is_multiparty": escrow.get("is_multiparty", False),
+                "total_parties": int(escrow.get("total_parties", 2)) if escrow.get("total_parties") else 2,
+                "total_buyers": int(escrow.get("total_buyers", 1)) if escrow.get("total_buyers") else 1,
+                "total_sellers": int(escrow.get("total_sellers", 1)) if escrow.get("total_sellers") else 1,
+                "funded_at": escrow.get("funded_at"),
+                "released_at": escrow.get("released_at"),
+                "created_at": escrow.get("created_at", datetime.utcnow()),
+                "updated_at": escrow.get("updated_at", datetime.utcnow())
+            }]
+            return await self.append_data("escrow_transactions", transformed)
+        except Exception as e:
+            logger.error("escrow_ingestion_failed", error=str(e))
+            return False
+
+    async def ingest_user_dimension(self, user: Dict[str, Any]) -> bool:
+        """Ingest user dimension data into Lakehouse for AI/ML"""
+        try:
+            transformed = [{
+                "user_id": user.get("id"),
+                "customer_type": user.get("customer_type", "individual"),
+                "kyc_tier": user.get("kyc_tier"),
+                "kyc_status": user.get("kyc_status"),
+                "country": user.get("country"),
+                "city": user.get("city"),
+                "age_group": user.get("age_group"),
+                "account_age_days": int(user.get("account_age_days", 0)) if user.get("account_age_days") else None,
+                "total_accounts": int(user.get("total_accounts", 1)) if user.get("total_accounts") else 1,
+                "primary_currency": user.get("primary_currency", "NGN"),
+                "risk_score": float(user.get("risk_score", 0)) if user.get("risk_score") else None,
+                "lifetime_transaction_count": int(user.get("lifetime_transaction_count", 0)) if user.get("lifetime_transaction_count") else None,
+                "lifetime_transaction_volume": Decimal(str(user.get("lifetime_transaction_volume", 0))) if user.get("lifetime_transaction_volume") else None,
+                "avg_transaction_amount": Decimal(str(user.get("avg_transaction_amount", 0))) if user.get("avg_transaction_amount") else None,
+                "last_transaction_date": user.get("last_transaction_date"),
+                "is_active": user.get("is_active", True),
+                "created_at": user.get("created_at", datetime.utcnow()),
+                "updated_at": user.get("updated_at", datetime.utcnow())
+            }]
+            return await self.append_data("user_dimension", transformed)
+        except Exception as e:
+            logger.error("user_dimension_ingestion_failed", error=str(e))
+            return False
+
+    async def ingest_feature_store(self, features: Dict[str, Any]) -> bool:
+        """Ingest feature store data for ML models"""
+        try:
+            transformed = [{
+                "feature_id": features.get("id"),
+                "user_id": features.get("user_id"),
+                "feature_date": features.get("feature_date", datetime.utcnow()),
+                "txn_count_1d": int(features.get("txn_count_1d", 0)) if features.get("txn_count_1d") else None,
+                "txn_count_7d": int(features.get("txn_count_7d", 0)) if features.get("txn_count_7d") else None,
+                "txn_count_30d": int(features.get("txn_count_30d", 0)) if features.get("txn_count_30d") else None,
+                "txn_volume_1d": Decimal(str(features.get("txn_volume_1d", 0))) if features.get("txn_volume_1d") else None,
+                "txn_volume_7d": Decimal(str(features.get("txn_volume_7d", 0))) if features.get("txn_volume_7d") else None,
+                "txn_volume_30d": Decimal(str(features.get("txn_volume_30d", 0))) if features.get("txn_volume_30d") else None,
+                "avg_txn_amount_7d": Decimal(str(features.get("avg_txn_amount_7d", 0))) if features.get("avg_txn_amount_7d") else None,
+                "max_txn_amount_30d": Decimal(str(features.get("max_txn_amount_30d", 0))) if features.get("max_txn_amount_30d") else None,
+                "unique_merchants_7d": int(features.get("unique_merchants_7d", 0)) if features.get("unique_merchants_7d") else None,
+                "unique_countries_30d": int(features.get("unique_countries_30d", 0)) if features.get("unique_countries_30d") else None,
+                "login_count_7d": int(features.get("login_count_7d", 0)) if features.get("login_count_7d") else None,
+                "failed_txn_rate_30d": float(features.get("failed_txn_rate_30d", 0)) if features.get("failed_txn_rate_30d") else None,
+                "fraud_score": float(features.get("fraud_score", 0)) if features.get("fraud_score") else None,
+                "credit_score": float(features.get("credit_score", 0)) if features.get("credit_score") else None,
+                "churn_probability": float(features.get("churn_probability", 0)) if features.get("churn_probability") else None,
+                "has_savings": features.get("has_savings", False),
+                "has_investments": features.get("has_investments", False),
+                "has_loans": features.get("has_loans", False),
+                "has_insurance": features.get("has_insurance", False),
+                "product_count": int(features.get("product_count", 0)) if features.get("product_count") else None,
+                "created_at": features.get("created_at", datetime.utcnow())
+            }]
+            return await self.append_data("feature_store", transformed)
+        except Exception as e:
+            logger.error("feature_store_ingestion_failed", error=str(e))
+            return False
+
+    async def ingest_ml_label(self, label: Dict[str, Any]) -> bool:
+        """Ingest ML label/ground truth data for model training"""
+        try:
+            transformed = [{
+                "label_id": label.get("id"),
+                "user_id": label.get("user_id"),
+                "reference_id": label.get("reference_id"),
+                "label_type": label.get("label_type"),
+                "is_fraud": label.get("is_fraud"),
+                "fraud_type": label.get("fraud_type"),
+                "fraud_confirmed_at": label.get("fraud_confirmed_at"),
+                "loan_defaulted": label.get("loan_defaulted"),
+                "days_past_due": int(label.get("days_past_due", 0)) if label.get("days_past_due") else None,
+                "default_amount": Decimal(str(label.get("default_amount", 0))) if label.get("default_amount") else None,
+                "churned": label.get("churned"),
+                "churn_date": label.get("churn_date"),
+                "days_inactive_before_churn": int(label.get("days_inactive_before_churn", 0)) if label.get("days_inactive_before_churn") else None,
+                "dispute_outcome": label.get("dispute_outcome"),
+                "dispute_resolved_in_favor": label.get("dispute_resolved_in_favor"),
+                "kyc_rejected": label.get("kyc_rejected"),
+                "kyc_rejection_reason": label.get("kyc_rejection_reason"),
+                "label_source": label.get("label_source", "manual"),
+                "created_at": label.get("created_at", datetime.utcnow()),
+                "updated_at": label.get("updated_at", datetime.utcnow())
+            }]
+            return await self.append_data("ml_labels", transformed)
+        except Exception as e:
+            logger.error("ml_label_ingestion_failed", error=str(e))
+            return False
+
+    async def ingest_audit_event(self, event: Dict[str, Any]) -> bool:
+        """Ingest audit/auth event for security analytics"""
+        try:
+            transformed = [{
+                "event_id": event.get("id"),
+                "user_id": event.get("user_id"),
+                "event_type": event.get("event_type"),
+                "event_action": event.get("event_action"),
+                "resource_type": event.get("resource_type"),
+                "resource_id": event.get("resource_id"),
+                "ip_address": event.get("ip_address"),
+                "user_agent": event.get("user_agent"),
+                "device_id": event.get("device_id"),
+                "device_type": event.get("device_type"),
+                "country": event.get("country"),
+                "city": event.get("city"),
+                "success": event.get("success", True),
+                "failure_reason": event.get("failure_reason"),
+                "risk_score": float(event.get("risk_score", 0)) if event.get("risk_score") else None,
+                "session_id": event.get("session_id"),
+                "timestamp": event.get("timestamp", datetime.utcnow())
+            }]
+            return await self.append_data("audit_events", transformed)
+        except Exception as e:
+            logger.error("audit_event_ingestion_failed", error=str(e))
             return False
 
     async def get_comprehensive_analytics(

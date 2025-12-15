@@ -1,0 +1,654 @@
+---
+# Lakehouse High Availability Data Platform Configuration
+# Production-ready Apache Iceberg + Spark + Trino data lakehouse
+# Version: 1.0.0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lakehouse
+  labels:
+    name: lakehouse
+    environment: production
+
+---
+# MinIO Object Storage StatefulSet (S3-compatible storage for Iceberg)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: lakehouse
+  labels:
+    app: minio
+spec:
+  serviceName: minio-headless
+  replicas: 4
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+        prometheus.io/path: "/minio/v2/metrics/cluster"
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - minio
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2024-01-01T16-36-33Z
+          args:
+            - server
+            - http://minio-{0...3}.minio-headless.lakehouse.svc.cluster.local/data
+            - --console-address
+            - ":9001"
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secrets
+                  key: root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secrets
+                  key: root-password
+            - name: MINIO_PROMETHEUS_AUTH_TYPE
+              value: public
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 500Gi
+
+---
+# MinIO Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-secrets
+  namespace: lakehouse
+type: Opaque
+stringData:
+  root-user: CHANGE_ME_MINIO_ROOT_USER
+  root-password: CHANGE_ME_MINIO_ROOT_PASSWORD
+
+---
+# MinIO Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: lakehouse
+spec:
+  selector:
+    app: minio
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: api
+    - port: 9001
+      targetPort: 9001
+      name: console
+  type: ClusterIP
+
+---
+# MinIO Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-headless
+  namespace: lakehouse
+spec:
+  clusterIP: None
+  selector:
+    app: minio
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: api
+
+---
+# Hive Metastore ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hive-metastore-config
+  namespace: lakehouse
+data:
+  hive-site.xml: |
+    <?xml version="1.0"?>
+    <configuration>
+      <property>
+        <name>javax.jdo.option.ConnectionURL</name>
+        <value>jdbc:postgresql://postgresql-primary.database:5432/hive_metastore</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionDriverName</name>
+        <value>org.postgresql.Driver</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionUserName</name>
+        <value>hive_user</value>
+      </property>
+      <property>
+        <name>javax.jdo.option.ConnectionPassword</name>
+        <value>CHANGE_ME_HIVE_PASSWORD</value>
+      </property>
+      <property>
+        <name>hive.metastore.warehouse.dir</name>
+        <value>s3a://lakehouse/warehouse</value>
+      </property>
+      <property>
+        <name>fs.s3a.endpoint</name>
+        <value>http://minio.lakehouse:9000</value>
+      </property>
+      <property>
+        <name>fs.s3a.access.key</name>
+        <value>CHANGE_ME_MINIO_ROOT_USER</value>
+      </property>
+      <property>
+        <name>fs.s3a.secret.key</name>
+        <value>CHANGE_ME_MINIO_ROOT_PASSWORD</value>
+      </property>
+      <property>
+        <name>fs.s3a.path.style.access</name>
+        <value>true</value>
+      </property>
+      <property>
+        <name>fs.s3a.impl</name>
+        <value>org.apache.hadoop.fs.s3a.S3AFileSystem</value>
+      </property>
+      <property>
+        <name>hive.metastore.uris</name>
+        <value>thrift://hive-metastore:9083</value>
+      </property>
+    </configuration>
+
+---
+# Hive Metastore Deployment (HA)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hive-metastore
+  namespace: lakehouse
+  labels:
+    app: hive-metastore
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: hive-metastore
+  template:
+    metadata:
+      labels:
+        app: hive-metastore
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - hive-metastore
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: hive-metastore
+          image: apache/hive:3.1.3
+          command:
+            - /opt/hive/bin/hive
+            - --service
+            - metastore
+          ports:
+            - containerPort: 9083
+              name: thrift
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            tcpSocket:
+              port: 9083
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: 9083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /opt/hive/conf/hive-site.xml
+              subPath: hive-site.xml
+      volumes:
+        - name: config
+          configMap:
+            name: hive-metastore-config
+
+---
+# Hive Metastore Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: hive-metastore
+  namespace: lakehouse
+spec:
+  selector:
+    app: hive-metastore
+  ports:
+    - port: 9083
+      targetPort: 9083
+      name: thrift
+  type: ClusterIP
+
+---
+# Trino Coordinator ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-coordinator-config
+  namespace: lakehouse
+data:
+  node.properties: |
+    node.environment=production
+    node.data-dir=/data/trino
+    plugin.dir=/usr/lib/trino/plugin
+  
+  jvm.config: |
+    -server
+    -Xmx8G
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+UseGCOverheadLimit
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:+ExitOnOutOfMemoryError
+    -Djdk.attach.allowAttachSelf=true
+    -Djdk.nio.maxCachedBufferSize=2000000
+  
+  config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    query.max-memory=50GB
+    query.max-memory-per-node=8GB
+    discovery.uri=http://trino-coordinator:8080
+    http-server.authentication.type=PASSWORD
+  
+  password-authenticator.properties: |
+    password-authenticator.name=file
+    file.password-file=/etc/trino/password.db
+  
+  iceberg.properties: |
+    connector.name=iceberg
+    hive.metastore.uri=thrift://hive-metastore:9083
+    iceberg.catalog.type=hive_metastore
+    hive.s3.endpoint=http://minio.lakehouse:9000
+    hive.s3.path-style-access=true
+    hive.s3.aws-access-key=CHANGE_ME_MINIO_ROOT_USER
+    hive.s3.aws-secret-key=CHANGE_ME_MINIO_ROOT_PASSWORD
+
+---
+# Trino Worker ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-worker-config
+  namespace: lakehouse
+data:
+  node.properties: |
+    node.environment=production
+    node.data-dir=/data/trino
+    plugin.dir=/usr/lib/trino/plugin
+  
+  jvm.config: |
+    -server
+    -Xmx16G
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+UseGCOverheadLimit
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:+ExitOnOutOfMemoryError
+    -Djdk.attach.allowAttachSelf=true
+    -Djdk.nio.maxCachedBufferSize=2000000
+  
+  config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    query.max-memory=50GB
+    query.max-memory-per-node=16GB
+    discovery.uri=http://trino-coordinator:8080
+  
+  iceberg.properties: |
+    connector.name=iceberg
+    hive.metastore.uri=thrift://hive-metastore:9083
+    iceberg.catalog.type=hive_metastore
+    hive.s3.endpoint=http://minio.lakehouse:9000
+    hive.s3.path-style-access=true
+    hive.s3.aws-access-key=CHANGE_ME_MINIO_ROOT_USER
+    hive.s3.aws-secret-key=CHANGE_ME_MINIO_ROOT_PASSWORD
+
+---
+# Trino Coordinator Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino-coordinator
+  namespace: lakehouse
+  labels:
+    app: trino
+    component: coordinator
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: trino
+      component: coordinator
+  template:
+    metadata:
+      labels:
+        app: trino
+        component: coordinator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: component
+                    operator: In
+                    values:
+                      - coordinator
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: trino
+          image: trinodb/trino:433
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 2000m
+              memory: 8Gi
+            limits:
+              cpu: 8000m
+              memory: 16Gi
+          livenessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino
+            - name: catalog
+              mountPath: /etc/trino/catalog
+      volumes:
+        - name: config
+          configMap:
+            name: trino-coordinator-config
+        - name: catalog
+          configMap:
+            name: trino-coordinator-config
+            items:
+              - key: iceberg.properties
+                path: iceberg.properties
+
+---
+# Trino Worker StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: trino-worker
+  namespace: lakehouse
+  labels:
+    app: trino
+    component: worker
+spec:
+  serviceName: trino-worker-headless
+  replicas: 5
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: trino
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: trino
+        component: worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: component
+                      operator: In
+                      values:
+                        - worker
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: trino
+          image: trinodb/trino:433
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 4000m
+              memory: 16Gi
+            limits:
+              cpu: 16000m
+              memory: 32Gi
+          livenessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/trino
+            - name: catalog
+              mountPath: /etc/trino/catalog
+            - name: data
+              mountPath: /data/trino
+      volumes:
+        - name: config
+          configMap:
+            name: trino-worker-config
+        - name: catalog
+          configMap:
+            name: trino-worker-config
+            items:
+              - key: iceberg.properties
+                path: iceberg.properties
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 100Gi
+
+---
+# Trino Coordinator Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino-coordinator
+  namespace: lakehouse
+spec:
+  selector:
+    app: trino
+    component: coordinator
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+  type: ClusterIP
+
+---
+# Trino Worker Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino-worker-headless
+  namespace: lakehouse
+spec:
+  clusterIP: None
+  selector:
+    app: trino
+    component: worker
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+
+---
+# PodDisruptionBudget for MinIO
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minio-pdb
+  namespace: lakehouse
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: minio
+
+---
+# PodDisruptionBudget for Trino Workers
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trino-worker-pdb
+  namespace: lakehouse
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: trino
+      component: worker
+
+---
+# HorizontalPodAutoscaler for Trino Workers
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trino-worker-hpa
+  namespace: lakehouse
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: trino-worker
+  minReplicas: 5
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: lakehouse-monitor
+  namespace: lakehouse
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: trino
+  endpoints:
+    - port: http
+      interval: 30s
+      path: /v1/info

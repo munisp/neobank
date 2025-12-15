@@ -1,0 +1,307 @@
+---
+# Kafka High Availability Cluster Configuration
+# Production-ready Kafka cluster with Strimzi operator
+# Version: 1.0.0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+  labels:
+    name: kafka
+    environment: production
+
+---
+# Kafka Cluster using Strimzi Operator
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: neobank-kafka-cluster
+  namespace: kafka
+spec:
+  kafka:
+    version: 3.6.0
+    replicas: 3
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+      - name: tls
+        port: 9093
+        type: internal
+        tls: true
+        authentication:
+          type: tls
+      - name: external
+        port: 9094
+        type: loadbalancer
+        tls: true
+        authentication:
+          type: tls
+    config:
+      # Replication settings for HA
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+      # Performance tuning
+      num.partitions: 12
+      num.network.threads: 8
+      num.io.threads: 16
+      socket.send.buffer.bytes: 102400
+      socket.receive.buffer.bytes: 102400
+      socket.request.max.bytes: 104857600
+      # Log settings
+      log.retention.hours: 168
+      log.segment.bytes: 1073741824
+      log.retention.check.interval.ms: 300000
+      # Auto leader rebalancing
+      auto.leader.rebalance.enable: true
+      leader.imbalance.check.interval.seconds: 300
+      leader.imbalance.per.broker.percentage: 10
+    storage:
+      type: jbod
+      volumes:
+        - id: 0
+          type: persistent-claim
+          size: 100Gi
+          deleteClaim: false
+          class: fast-ssd
+    resources:
+      requests:
+        memory: 4Gi
+        cpu: 2000m
+      limits:
+        memory: 8Gi
+        cpu: 4000m
+    jvmOptions:
+      -Xms: 2048m
+      -Xmx: 4096m
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-metrics
+          key: kafka-metrics-config.yml
+    template:
+      pod:
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                    - key: strimzi.io/name
+                      operator: In
+                      values:
+                        - neobank-kafka-cluster-kafka
+                topologyKey: kubernetes.io/hostname
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: strimzi.io/name
+                        operator: In
+                        values:
+                          - neobank-kafka-cluster-kafka
+                  topologyKey: topology.kubernetes.io/zone
+        tolerations:
+          - key: dedicated
+            operator: Equal
+            value: kafka
+            effect: NoSchedule
+  zookeeper:
+    replicas: 3
+    storage:
+      type: persistent-claim
+      size: 20Gi
+      deleteClaim: false
+      class: fast-ssd
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+    jvmOptions:
+      -Xms: 512m
+      -Xmx: 1024m
+    template:
+      pod:
+        affinity:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchExpressions:
+                    - key: strimzi.io/name
+                      operator: In
+                      values:
+                        - neobank-kafka-cluster-zookeeper
+                topologyKey: kubernetes.io/hostname
+  entityOperator:
+    topicOperator:
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 100m
+        limits:
+          memory: 512Mi
+          cpu: 500m
+    userOperator:
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 100m
+        limits:
+          memory: 512Mi
+          cpu: 500m
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"
+    resources:
+      requests:
+        memory: 128Mi
+        cpu: 100m
+      limits:
+        memory: 256Mi
+        cpu: 200m
+
+---
+# Kafka Topics for NeoBank
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: transactions
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: neobank-kafka-cluster
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: 604800000
+    segment.bytes: 1073741824
+    min.insync.replicas: 2
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: kyc-events
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: neobank-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: 2592000000
+    min.insync.replicas: 2
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: audit-logs
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: neobank-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: 31536000000
+    min.insync.replicas: 2
+
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: notifications
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: neobank-kafka-cluster
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: 86400000
+    min.insync.replicas: 2
+
+---
+# Kafka Metrics ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-metrics
+  namespace: kafka
+data:
+  kafka-metrics-config.yml: |
+    lowercaseOutputName: true
+    rules:
+    - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), topic=(.+), partition=(.*)><>Value
+      name: kafka_server_$1_$2
+      type: GAUGE
+      labels:
+        clientId: "$3"
+        topic: "$4"
+        partition: "$5"
+    - pattern: kafka.server<type=(.+), name=(.+), clientId=(.+), brokerHost=(.+), brokerPort=(.+)><>Value
+      name: kafka_server_$1_$2
+      type: GAUGE
+      labels:
+        clientId: "$3"
+        broker: "$4:$5"
+    - pattern: kafka.server<type=(.+), name=(.+)><>Value
+      name: kafka_server_$1_$2
+      type: GAUGE
+    - pattern: kafka.server<type=(.+), name=(.+)><>Count
+      name: kafka_server_$1_$2_total
+      type: COUNTER
+
+---
+# PodDisruptionBudget for Kafka
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kafka-pdb
+  namespace: kafka
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      strimzi.io/name: neobank-kafka-cluster-kafka
+
+---
+# PodDisruptionBudget for Zookeeper
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zookeeper-pdb
+  namespace: kafka
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      strimzi.io/name: neobank-kafka-cluster-zookeeper
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafka-monitor
+  namespace: kafka
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/cluster: neobank-kafka-cluster
+  endpoints:
+    - port: tcp-prometheus
+      interval: 30s
+      path: /metrics

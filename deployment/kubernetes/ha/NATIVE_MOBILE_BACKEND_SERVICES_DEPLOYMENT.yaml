@@ -1,0 +1,1091 @@
+# NeoBank Native Mobile Backend Services - Kubernetes Deployment
+# Production-Ready Configuration for iOS & Android Apps
+# Version: 1.0.0
+# 
+# Services Included:
+# - Mobile API Gateway (APISIX)
+# - Push Notification Service (Firebase Cloud Messaging)
+# - WebSocket Server (Real-time updates)
+# - Mobile Analytics Service
+# - App Version Control Service
+# - Deep Link Service
+# - Biometric Authentication Service
+# - Mobile Session Management
+
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neobank-mobile-services
+  labels:
+    name: neobank-mobile-services
+    tier: mobile
+    environment: production
+
+---
+# Mobile Services ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mobile-services-config
+  namespace: neobank-mobile-services
+data:
+  # Environment
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  
+  # Backend API Configuration
+  BACKEND_API_URL: "http://backend-api.neobank-production.svc.cluster.local:8000"
+  BACKEND_API_TIMEOUT: "30000"
+  
+  # Mobile API Gateway
+  MOBILE_API_VERSION: "v1"
+  MOBILE_API_PREFIX: "/mobile/api/v1"
+  
+  # WebSocket Configuration
+  WEBSOCKET_PORT: "8080"
+  WEBSOCKET_PATH: "/ws"
+  WEBSOCKET_PING_INTERVAL: "30000"
+  WEBSOCKET_PING_TIMEOUT: "5000"
+  
+  # Push Notifications
+  FCM_ENABLED: "true"
+  APNS_ENABLED: "true"
+  APNS_PRODUCTION: "true"
+  
+  # Session Management
+  SESSION_TIMEOUT: "1800"  # 30 minutes
+  REFRESH_TOKEN_LIFETIME: "604800"  # 7 days
+  DEVICE_LIMIT_PER_USER: "5"
+  
+  # Biometric Authentication
+  BIOMETRIC_TIMEOUT: "300"  # 5 minutes
+  BIOMETRIC_MAX_ATTEMPTS: "3"
+  
+  # App Version Control
+  MIN_IOS_VERSION: "1.0.0"
+  MIN_ANDROID_VERSION: "1.0.0"
+  FORCE_UPDATE_ENABLED: "false"
+  
+  # Deep Links
+  DEEP_LINK_DOMAIN: "neobank.app"
+  UNIVERSAL_LINKS_ENABLED: "true"
+  APP_LINKS_ENABLED: "true"
+  
+  # Analytics
+  ANALYTICS_ENABLED: "true"
+  ANALYTICS_BATCH_SIZE: "100"
+  ANALYTICS_FLUSH_INTERVAL: "60000"
+  
+  # Rate Limiting
+  RATE_LIMIT_ENABLED: "true"
+  RATE_LIMIT_PER_MINUTE: "60"
+  RATE_LIMIT_BURST: "10"
+  
+  # Redis Configuration
+  REDIS_HOST: "redis-headless.neobank-production.svc.cluster.local"
+  REDIS_PORT: "6379"
+  REDIS_DB: "1"
+  
+  # Monitoring
+  PROMETHEUS_ENABLED: "true"
+  JAEGER_ENABLED: "true"
+
+---
+# Mobile Services Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mobile-services-secrets
+  namespace: neobank-mobile-services
+type: Opaque
+stringData:
+  # Firebase Cloud Messaging
+  FCM_SERVER_KEY: "CHANGE_ME_FCM_SERVER_KEY"
+  FCM_SENDER_ID: "CHANGE_ME_FCM_SENDER_ID"
+  FIREBASE_ADMIN_SDK_JSON: |
+    {
+      "type": "service_account",
+      "project_id": "neobank",
+      "private_key_id": "CHANGE_ME",
+      "private_key": "CHANGE_ME",
+      "client_email": "firebase-adminsdk@neobank.iam.gserviceaccount.com",
+      "client_id": "CHANGE_ME",
+      "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+      "token_uri": "https://oauth2.googleapis.com/token",
+      "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs"
+    }
+  
+  # Apple Push Notification Service (APNS)
+  APNS_KEY_ID: "CHANGE_ME_APNS_KEY_ID"
+  APNS_TEAM_ID: "CHANGE_ME_APNS_TEAM_ID"
+  APNS_AUTH_KEY: "CHANGE_ME_APNS_P8_AUTH_KEY"
+  APNS_BUNDLE_ID: "com.neobank.app"
+  
+  # JWT Configuration
+  JWT_SECRET_KEY: "CHANGE_ME_JWT_SECRET_256_BITS"
+  JWT_ALGORITHM: "HS256"
+  MOBILE_ACCESS_TOKEN_EXPIRE: "1800"  # 30 minutes
+  MOBILE_REFRESH_TOKEN_EXPIRE: "604800"  # 7 days
+  
+  # Encryption
+  DEVICE_ENCRYPTION_KEY: "CHANGE_ME_DEVICE_ENCRYPTION_KEY_256_BITS"
+  
+  # Redis Password
+  REDIS_PASSWORD: "CHANGE_ME_REDIS_PASSWORD"
+  
+  # Analytics
+  MIXPANEL_TOKEN: "your_mixpanel_token"
+  AMPLITUDE_API_KEY: "your_amplitude_api_key"
+  
+  # Monitoring
+  SENTRY_DSN: "your_sentry_dsn"
+
+---
+# Mobile API Gateway (APISIX) Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mobile-api-gateway
+  namespace: neobank-mobile-services
+  labels:
+    app: mobile-api-gateway
+    tier: mobile
+    component: gateway
+spec:
+  replicas: 5
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  
+  selector:
+    matchLabels:
+      app: mobile-api-gateway
+  
+  template:
+    metadata:
+      labels:
+        app: mobile-api-gateway
+        tier: mobile
+        component: gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+    
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - mobile-api-gateway
+              topologyKey: kubernetes.io/hostname
+      
+      containers:
+      - name: apisix
+        image: apache/apisix:3.7.0-debian
+        
+        ports:
+        - name: http
+          containerPort: 9080
+        - name: https
+          containerPort: 9443
+        - name: admin
+          containerPort: 9091
+        
+        envFrom:
+        - configMapRef:
+            name: mobile-services-config
+        
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        
+        livenessProbe:
+          httpGet:
+            path: /apisix/status
+            port: 9080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /apisix/status
+            port: 9080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# Mobile API Gateway Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mobile-api-gateway
+  namespace: neobank-mobile-services
+  labels:
+    app: mobile-api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: mobile-api-gateway
+  ports:
+  - name: http
+    port: 9080
+    targetPort: 9080
+  - name: https
+    port: 9443
+    targetPort: 9443
+  - name: admin
+    port: 9091
+    targetPort: 9091
+
+---
+# Push Notification Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: push-notification-service
+  namespace: neobank-mobile-services
+  labels:
+    app: push-notification-service
+    tier: mobile
+    component: notifications
+spec:
+  replicas: 3
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  selector:
+    matchLabels:
+      app: push-notification-service
+  
+  template:
+    metadata:
+      labels:
+        app: push-notification-service
+        tier: mobile
+        component: notifications
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - push-notification-service
+              topologyKey: kubernetes.io/hostname
+      
+      containers:
+      - name: push-service
+        image: neobank-push-notification-service:v1.0.0
+        
+        ports:
+        - name: http
+          containerPort: 8000
+        - name: metrics
+          containerPort: 9090
+        
+        envFrom:
+        - configMapRef:
+            name: mobile-services-config
+        - secretRef:
+            name: mobile-services-secrets
+        
+        env:
+        - name: SERVICE_NAME
+          value: "push-notification-service"
+        
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        
+        volumeMounts:
+        - name: firebase-credentials
+          mountPath: /app/credentials
+          readOnly: true
+      
+      volumes:
+      - name: firebase-credentials
+        secret:
+          secretName: mobile-services-secrets
+          items:
+          - key: FIREBASE_ADMIN_SDK_JSON
+            path: firebase-admin-sdk.json
+
+---
+# Push Notification Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: push-notification-service
+  namespace: neobank-mobile-services
+  labels:
+    app: push-notification-service
+spec:
+  type: ClusterIP
+  selector:
+    app: push-notification-service
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+
+---
+# WebSocket Server Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: websocket-server
+  namespace: neobank-mobile-services
+  labels:
+    app: websocket-server
+    tier: mobile
+    component: realtime
+spec:
+  replicas: 5
+  
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  
+  selector:
+    matchLabels:
+      app: websocket-server
+  
+  template:
+    metadata:
+      labels:
+        app: websocket-server
+        tier: mobile
+        component: realtime
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - websocket-server
+              topologyKey: kubernetes.io/hostname
+      
+      containers:
+      - name: websocket
+        image: neobank-websocket-server:v1.0.0
+        
+        ports:
+        - name: websocket
+          containerPort: 8080
+        - name: metrics
+          containerPort: 9090
+        
+        envFrom:
+        - configMapRef:
+            name: mobile-services-config
+        - secretRef:
+            name: mobile-services-secrets
+        
+        env:
+        - name: SERVICE_NAME
+          value: "websocket-server"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# WebSocket Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: websocket-server
+  namespace: neobank-mobile-services
+  labels:
+    app: websocket-server
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  selector:
+    app: websocket-server
+  ports:
+  - name: websocket
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+
+---
+# Mobile Analytics Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mobile-analytics-service
+  namespace: neobank-mobile-services
+  labels:
+    app: mobile-analytics-service
+    tier: mobile
+    component: analytics
+spec:
+  replicas: 3
+  
+  selector:
+    matchLabels:
+      app: mobile-analytics-service
+  
+  template:
+    metadata:
+      labels:
+        app: mobile-analytics-service
+        tier: mobile
+        component: analytics
+    
+    spec:
+      containers:
+      - name: analytics
+        image: neobank-mobile-analytics:v1.0.0
+        
+        ports:
+        - name: http
+          containerPort: 8000
+        
+        envFrom:
+        - configMapRef:
+            name: mobile-services-config
+        - secretRef:
+            name: mobile-services-secrets
+        
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+
+---
+# Mobile Analytics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mobile-analytics-service
+  namespace: neobank-mobile-services
+spec:
+  type: ClusterIP
+  selector:
+    app: mobile-analytics-service
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+
+---
+# App Version Control Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-version-service
+  namespace: neobank-mobile-services
+  labels:
+    app: app-version-service
+    tier: mobile
+    component: version-control
+spec:
+  replicas: 2
+  
+  selector:
+    matchLabels:
+      app: app-version-service
+  
+  template:
+    metadata:
+      labels:
+        app: app-version-service
+        tier: mobile
+        component: version-control
+    
+    spec:
+      containers:
+      - name: version-control
+        image: neobank-app-version-service:v1.0.0
+        
+        ports:
+        - name: http
+          containerPort: 8000
+        
+        envFrom:
+        - configMapRef:
+            name: mobile-services-config
+        
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# App Version Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-version-service
+  namespace: neobank-mobile-services
+spec:
+  type: ClusterIP
+  selector:
+    app: app-version-service
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+
+---
+# Deep Link Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deep-link-service
+  namespace: neobank-mobile-services
+  labels:
+    app: deep-link-service
+    tier: mobile
+    component: deep-links
+spec:
+  replicas: 2
+  
+  selector:
+    matchLabels:
+      app: deep-link-service
+  
+  template:
+    metadata:
+      labels:
+        app: deep-link-service
+        tier: mobile
+        component: deep-links
+    
+    spec:
+      containers:
+      - name: deep-links
+        image: neobank-deep-link-service:v1.0.0
+        
+        ports:
+        - name: http
+          containerPort: 8000
+        
+        envFrom:
+        - configMapRef:
+            name: mobile-services-config
+        
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+
+---
+# Deep Link Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: deep-link-service
+  namespace: neobank-mobile-services
+spec:
+  type: ClusterIP
+  selector:
+    app: deep-link-service
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+
+---
+# Mobile Session Manager Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mobile-session-manager
+  namespace: neobank-mobile-services
+  labels:
+    app: mobile-session-manager
+    tier: mobile
+    component: session
+spec:
+  replicas: 3
+  
+  selector:
+    matchLabels:
+      app: mobile-session-manager
+  
+  template:
+    metadata:
+      labels:
+        app: mobile-session-manager
+        tier: mobile
+        component: session
+    
+    spec:
+      containers:
+      - name: session-manager
+        image: neobank-mobile-session-manager:v1.0.0
+        
+        ports:
+        - name: http
+          containerPort: 8000
+        
+        envFrom:
+        - configMapRef:
+            name: mobile-services-config
+        - secretRef:
+            name: mobile-services-secrets
+        
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# Mobile Session Manager Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mobile-session-manager
+  namespace: neobank-mobile-services
+spec:
+  type: ClusterIP
+  selector:
+    app: mobile-session-manager
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+
+---
+# HPA for Mobile API Gateway
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mobile-api-gateway-hpa
+  namespace: neobank-mobile-services
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mobile-api-gateway
+  minReplicas: 5
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# HPA for Push Notification Service
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: push-notification-hpa
+  namespace: neobank-mobile-services
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: push-notification-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# HPA for WebSocket Server
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: websocket-server-hpa
+  namespace: neobank-mobile-services
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: websocket-server
+  minReplicas: 5
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# Pod Disruption Budget for Mobile API Gateway
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mobile-api-gateway-pdb
+  namespace: neobank-mobile-services
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: mobile-api-gateway
+
+---
+# Pod Disruption Budget for WebSocket Server
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: websocket-server-pdb
+  namespace: neobank-mobile-services
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: websocket-server
+
+---
+# Ingress for Mobile Services
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mobile-services-ingress
+  namespace: neobank-mobile-services
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/websocket-services: "websocket-server"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+spec:
+  tls:
+  - hosts:
+    - mobile-api.neobank.com
+    - ws.neobank.com
+    secretName: mobile-services-tls
+  
+  rules:
+  # Mobile API Gateway
+  - host: mobile-api.neobank.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mobile-api-gateway
+            port:
+              number: 9080
+  
+  # WebSocket Server
+  - host: ws.neobank.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: websocket-server
+            port:
+              number: 8080
+
+---
+# Network Policy for Mobile Services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mobile-services-network-policy
+  namespace: neobank-mobile-services
+spec:
+  podSelector:
+    matchLabels:
+      tier: mobile
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9080
+  
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # Backend API
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: neobank-production
+      podSelector:
+        matchLabels:
+          app: backend-api
+    ports:
+    - protocol: TCP
+      port: 8000
+  
+  # Redis
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: neobank-production
+      podSelector:
+        matchLabels:
+          app: redis-cluster
+    ports:
+    - protocol: TCP
+      port: 6379
+  
+  # External HTTPS (Firebase, APNS, etc.)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# Service Monitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mobile-services-monitor
+  namespace: neobank-mobile-services
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      tier: mobile
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# Deployment Summary
+# ====================
+# 
+# Mobile Backend Services:
+# ✅ Mobile API Gateway (APISIX) - 5-20 replicas
+# ✅ Push Notification Service (FCM/APNS) - 3-10 replicas
+# ✅ WebSocket Server (Real-time) - 5-20 replicas
+# ✅ Mobile Analytics Service - 3 replicas
+# ✅ App Version Control Service - 2 replicas
+# ✅ Deep Link Service - 2 replicas
+# ✅ Mobile Session Manager - 3 replicas
+# 
+# Total Services: 7
+# Total Pods (minimum): 23
+# Total Pods (maximum): 57 (under high load)
+# 
+# Resource Requirements (minimum):
+# - CPU: ~12 cores
+# - Memory: ~24GB
+# 
+# Resource Requirements (maximum):
+# - CPU: ~40 cores
+# - Memory: ~80GB
+# 
+# High Availability Features:
+# ✅ Auto-scaling (HPA)
+# ✅ Pod anti-affinity
+# ✅ Pod disruption budgets
+# ✅ Rolling updates
+# ✅ Health checks
+# ✅ Network policies
+# ✅ Prometheus monitoring
+# 
+# External Integrations:
+# ✅ Firebase Cloud Messaging (FCM)
+# ✅ Apple Push Notification Service (APNS)
+# ✅ Redis (session/cache)
+# ✅ Backend API
+# ✅ Analytics platforms (Mixpanel, Amplitude)
+# ✅ Monitoring (Sentry, Prometheus)
+# 
+# Deployment Commands:
+# ====================
+# 
+# 1. Deploy all services:
+#    kubectl apply -f NATIVE_MOBILE_BACKEND_SERVICES_DEPLOYMENT.yaml
+# 
+# 2. Verify deployment:
+#    kubectl get all -n neobank-mobile-services
+#    kubectl get hpa -n neobank-mobile-services
+#    kubectl get pdb -n neobank-mobile-services
+# 
+# 3. Check logs:
+#    kubectl logs -f deployment/mobile-api-gateway -n neobank-mobile-services
+#    kubectl logs -f deployment/push-notification-service -n neobank-mobile-services
+#    kubectl logs -f deployment/websocket-server -n neobank-mobile-services
+# 
+# 4. Test endpoints:
+#    # Mobile API Gateway
+#    curl https://mobile-api.neobank.com/health
+#    
+#    # WebSocket Server
+#    wscat -c wss://ws.neobank.com/ws
+#    
+#    # Push Notification Service
+#    kubectl port-forward svc/push-notification-service 8000:8000 -n neobank-mobile-services
+#    curl http://localhost:8000/health
+# 
+# 5. Scale manually:
+#    kubectl scale deployment mobile-api-gateway --replicas=10 -n neobank-mobile-services
+# 
+# 6. Update:
+#    kubectl set image deployment/push-notification-service \
+#      push-service=neobank-push-notification-service:v1.1.0 \
+#      -n neobank-mobile-services

@@ -1,0 +1,83 @@
+{
+  "short_name": "Etherisc Neobank",
+  "name": "Nigerian Neobank with Decentralized Insurance",
+  "description": "Complete digital banking platform with blockchain-powered insurance products for Nigerians",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0ea5e9",
+  "background_color": "#ffffff",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "categories": ["finance", "business", "productivity"],
+  "lang": "en-NG",
+  "dir": "ltr",
+  "prefer_related_applications": false,
+  "related_applications": [
+    {
+      "platform": "play",
+      "url": "https://play.google.com/store/apps/details?id=com.etherisc.neobank",
+      "id": "com.etherisc.neobank"
+    },
+    {
+      "platform": "itunes",
+      "url": "https://apps.apple.com/app/etherisc-neobank/id123456789"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Send Money",
+      "short_name": "Send",
+      "description": "Send money to friends and family",
+      "url": "/transfer",
+      "icons": [{ "src": "/icons/send-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Buy Insurance",
+      "short_name": "Insurance",
+      "description": "Purchase decentralized insurance",
+      "url": "/insurance",
+      "icons": [{ "src": "/icons/insurance-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Account Balance",
+      "short_name": "Balance",
+      "description": "Check your account balance",
+      "url": "/dashboard",
+      "icons": [{ "src": "/icons/balance-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/dashboard-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Dashboard view showing account balance and recent transactions"
+    },
+    {
+      "src": "/screenshots/dashboard-narrow.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Mobile dashboard view"
+    }
+  ]
+}
+

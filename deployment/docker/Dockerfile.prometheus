@@ -1,0 +1,77 @@
+# Stage 1: Build the Prometheus binary
+# Use a builder image with Go installed.
+FROM golang:1.22-alpine AS builder
+
+# Set necessary environment variables
+ENV PROMETHEUS_VERSION="2.50.1"
+ENV PROMETHEUS_USER="prometheus"
+ENV PROMETHEUS_GROUP="prometheus"
+
+# Install git and other build dependencies
+RUN apk add --no-cache git make
+
+# Create a non-root user and group for security
+RUN addgroup -S ${PROMETHEUS_GROUP} && \
+    adduser -S -u 1000 -G ${PROMETHEUS_GROUP} ${PROMETHEUS_USER}
+
+# Set the working directory
+WORKDIR /src/prometheus
+
+# Clone the Prometheus repository
+RUN git clone https://github.com/prometheus/prometheus.git . && \
+    git checkout v${PROMETHEUS_VERSION}
+
+# Build the Prometheus binary
+# The -tags 'netgo' is for static linking, and -ldflags are for version info
+RUN make build
+
+# Stage 2: Create the final minimal image
+FROM alpine:3.19 AS final_alpine
+
+# Set necessary environment variables
+ENV PROMETHEUS_USER="prometheus"
+ENV PROMETHEUS_GROUP="prometheus"
+ENV PROMETHEUS_HOME="/etc/prometheus"
+ENV PROMETHEUS_DATA="/prometheus"
+
+# Create the non-root user and group again, ensuring they have the same UID/GID
+RUN addgroup -S ${PROMETHEUS_GROUP} && \
+    adduser -S -u 1000 -G ${PROMETHEUS_GROUP} ${PROMETHEUS_USER}
+
+# Create necessary directories and set ownership
+RUN mkdir -p ${PROMETHEUS_HOME} ${PROMETHEUS_DATA} && \
+    chown -R ${PROMETHEUS_USER}:${PROMETHEUS_GROUP} ${PROMETHEUS_HOME} ${PROMETHEUS_DATA}
+
+# Copy the built binary and the web files from the builder stage
+COPY --from=builder /src/prometheus/prometheus /usr/local/bin/prometheus
+COPY --from=builder /src/prometheus/promtool /usr/local/bin/promtool
+COPY --from=builder /src/prometheus/web/ui /usr/local/share/prometheus/web/ui
+
+# Copy a default configuration file (assuming a basic prometheus.yml exists)
+# This is a placeholder. In production, the config should be mounted as a volume.
+RUN echo "global:\n  scrape_interval: 15s\nscrape_configs:\n  - job_name: 'prometheus'\n    static_configs:\n      - targets: ['localhost:9090']" > ${PROMETHEUS_HOME}/prometheus.yml
+
+# Set the working directory to the configuration directory
+WORKDIR ${PROMETHEUS_HOME}
+
+# Change ownership of the binary and web files
+RUN chown ${PROMETHEUS_USER}:${PROMETHEUS_GROUP} /usr/local/bin/prometheus && \
+    chown -R ${PROMETHEUS_USER}:${PROMETHEUS_GROUP} /usr/local/share/prometheus
+
+# Run as the non-root user
+USER ${PROMETHEUS_USER}
+
+# Expose the default Prometheus port
+EXPOSE 9090
+
+# Health check
+# Prometheus exposes a /-/ready endpoint
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["/usr/local/bin/promtool", "check", "web", "http://localhost:9090/-/ready"]
+
+# Command to run Prometheus
+ENTRYPOINT ["/usr/local/bin/prometheus"]
+CMD ["--config.file=/etc/prometheus/prometheus.yml", \
+     "--storage.tsdb.path=/prometheus", \
+     "--web.console.libraries=/usr/local/share/prometheus/web/ui/console_libraries", \
+     "--web.console.templates=/usr/local/share/prometheus/web/ui/consoles"]

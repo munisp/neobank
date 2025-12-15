@@ -1,0 +1,254 @@
+name: Backend API CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches:
+      - main
+      - staging
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+env:
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Placeholder for the application port, adjust as needed
+  APP_PORT: 8080
+
+jobs:
+  # =================================================================================================
+  # 1. Test Stage: Linting, Unit Tests, Security Scan
+  # =================================================================================================
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python (assuming a Python backend, adjust for Node/Go/etc.)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip' # Cache optimization
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt # Adjust to your dependency file
+
+      - name: Run Linter (e.g., flake8)
+        run: |
+          pip install flake8
+          flake8 . --max-complexity=10 --max-line-length=120
+
+      - name: Run Unit Tests (e.g., pytest)
+        run: |
+          pip install pytest
+          pytest
+
+      - name: Security Scanning (CodeQL)
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python # Adjust language
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: Set Image Tag
+        id: set_tag
+        run: |
+          TAG=$(echo ${{ github.sha }} | cut -c1-8)
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+  # =================================================================================================
+  # 2. Build Stage: Docker Build and Push
+  # =================================================================================================
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ needs.test.outputs.image_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.image_tag }}
+          cache-from: type=gha # Cache optimization
+          cache-to: type=gha,mode=max
+
+      - name: Security Scanning (Trivy for Image)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.test.outputs.image_tag }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  # =================================================================================================
+  # 3. Deploy Stage: Staging Environment
+  # =================================================================================================
+  deploy-staging:
+    needs: build
+    if: github.ref == 'refs/heads/staging' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.deployment_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Kubeconfig (using OIDC for secure access)
+        uses: aws-actions/configure-aws-credentials@v4 # Example for AWS EKS, adjust for GKE/AKS
+        with:
+          role-to-assume: ${{ secrets.AWS_EKS_STAGING_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: github-actions-staging-deployment
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Deploy to Staging Kubernetes
+        id: deploy
+        run: |
+          # Replace with your actual deployment command (e.g., helm upgrade, kubectl apply)
+          # Example using kubectl:
+          kubectl set image deployment/backend-api-staging backend-api-container=${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }} -n staging-namespace
+          
+          # Wait for rollout to complete
+          kubectl rollout status deployment/backend-api-staging -n staging-namespace --timeout=5m
+          
+          # Placeholder for setting deployment URL
+          echo "deployment_url=http://staging.example.com" >> $GITHUB_OUTPUT
+
+      - name: Run Smoke Tests on Staging
+        run: |
+          # Example smoke test: check if the service is up
+          curl -f http://staging.example.com/health || (echo "Smoke test failed" && exit 1)
+
+      - name: Notification on Staging Success
+        if: success()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MESSAGE: "✅ Staging Deployment Successful: ${{ github.ref_name }} - Image: ${{ needs.build.outputs.image_tag }}"
+          SLACK_COLOR: 'good'
+
+      - name: Notification on Staging Failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MESSAGE: "❌ Staging Deployment Failed: ${{ github.ref_name }} - Check workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SLACK_COLOR: 'danger'
+
+  # =================================================================================================
+  # 4. Deploy Stage: Production Environment
+  # =================================================================================================
+  deploy-production:
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.deployment_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Kubeconfig (using OIDC for secure access)
+        uses: aws-actions/configure-aws-credentials@v4 # Example for AWS EKS, adjust for GKE/AKS
+        with:
+          role-to-assume: ${{ secrets.AWS_EKS_PRODUCTION_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: github-actions-production-deployment
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Deploy to Production Kubernetes
+        id: deploy
+        run: |
+          # Replace with your actual deployment command
+          kubectl set image deployment/backend-api-production backend-api-container=${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }} -n production-namespace
+          
+          # Wait for rollout to complete
+          kubectl rollout status deployment/backend-api-production -n production-namespace --timeout=5m
+          
+          # Placeholder for setting deployment URL
+          echo "deployment_url=http://api.example.com" >> $GITHUB_OUTPUT
+
+      - name: Run Smoke Tests on Production
+        run: |
+          # Example smoke test: check if the service is up
+          curl -f http://api.example.com/health || (echo "Smoke test failed" && exit 1)
+
+      - name: Notification on Production Success
+        if: success()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MESSAGE: "🚀 Production Deployment Successful: ${{ github.ref_name }} - Image: ${{ needs.build.outputs.image_tag }}"
+          SLACK_COLOR: 'good'
+
+      - name: Notification on Production Failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MESSAGE: "🚨 Production Deployment Failed: ${{ github.ref_name }} - Check workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          SLACK_COLOR: 'danger'
+
+  # =================================================================================================
+  # 5. Rollback Job (Manual Trigger)
+  # =================================================================================================
+  rollback:
+    if: always()
+    needs: [deploy-staging, deploy-production]
+    runs-on: ubuntu-latest
+    # This job is only intended to be run manually via workflow_dispatch
+    # It is included here to demonstrate the capability, but a dedicated rollback workflow is often better.
+    steps:
+      - name: Rollback Instructions
+        run: |
+          echo "To perform a rollback, you would typically run a command like:"
+          echo "kubectl rollout undo deployment/backend-api-production -n production-namespace"
+          echo "Or use a Helm rollback command."
+          echo "This job serves as a placeholder and reminder for the rollback capability."
+
+      - name: Notification on Rollback Trigger
+        if: github.event_name == 'workflow_dispatch' && contains(github.event.inputs.action, 'rollback')
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MESSAGE: "↩️ Rollback initiated manually for ${{ github.event.inputs.environment }}."
+          SLACK_COLOR: 'warning'

@@ -1,0 +1,208 @@
+# .gitlab-ci.yml - Production-Ready CI/CD Pipeline for GitLab
+
+# ----------------------------------------------------------------------
+# 1. Global Configuration
+# ----------------------------------------------------------------------
+variables:
+  # Docker image variables
+  DOCKER_IMAGE_NAME: $CI_REGISTRY_IMAGE/$CI_COMMIT_REF_SLUG
+  DOCKER_IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  # Kubernetes variables
+  KUBE_NAMESPACE: default
+  # Application-specific variables (replace with actual values)
+  SERVICE_NAME: my-app
+  SERVICE_PORT: 8080
+
+# Define the stages of the pipeline
+stages:
+  - test
+  - security_scan
+  - build
+  - deploy
+  - notify
+
+# ----------------------------------------------------------------------
+# 2. Cache Optimization
+# ----------------------------------------------------------------------
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .npm/
+    - node_modules/
+    - vendor/
+  policy: pull-push
+
+# ----------------------------------------------------------------------
+# 3. Automated Testing
+# ----------------------------------------------------------------------
+.test_template: &test_definition
+  stage: test
+  image: node:20-alpine # Example image, adjust based on project language
+  before_script:
+    - npm ci --cache .npm # Example dependency installation
+  script:
+    - echo "Running linting and unit tests..."
+    - npm run lint
+    - npm run test
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml # For test reporting in GitLab UI
+
+test:
+  <<: *test_definition
+
+# ----------------------------------------------------------------------
+# 4. Security Scanning (SAST, Dependency Scanning)
+# ----------------------------------------------------------------------
+# Leverage GitLab's built-in security scanning templates
+# Requires GitLab Ultimate or higher for full functionality
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  # - template: Security/Container-Scanning.gitlab-ci.yml # Add if base image is scanned
+  # - template: Security/DAST.gitlab-ci.yml # Add for dynamic scanning on deployed app
+
+sast:
+  stage: security_scan
+  # Customize SAST job if needed, e.g., to fail the pipeline on critical findings
+  allow_failure: true # Set to false for strict security gates
+
+dependency_scanning:
+  stage: security_scan
+  allow_failure: true
+
+# ----------------------------------------------------------------------
+# 5. Docker Image Building and Pushing
+# ----------------------------------------------------------------------
+build_image:
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  script:
+    - echo "Logging into GitLab Container Registry..."
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - echo "Building Docker image: $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG"
+    - docker build -t $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG .
+    - echo "Pushing Docker image to registry..."
+    - docker push $DOCKER_IMAGE_NAME:$DOCKER_IMAGE_TAG
+  # Save the image tag as a variable for the deploy stage
+  artifacts:
+    reports:
+      dotenv: build.env
+
+# ----------------------------------------------------------------------
+# 6. Environment-Specific Deployments (Staging & Production)
+# ----------------------------------------------------------------------
+
+# Template for Kubernetes deployment
+.deploy_template: &deploy_definition
+  stage: deploy
+  image:
+    name: bitnami/kubectl:latest # Use a lightweight image with kubectl
+    entrypoint: [""]
+  script:
+    - echo "Deploying $SERVICE_NAME:$DOCKER_IMAGE_TAG to $CI_ENVIRONMENT_NAME..."
+    # 1. Replace placeholder in Kubernetes manifest with the new image tag
+    - sed -i "s|__DOCKER_IMAGE__|${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}|g" k8s/deployment.yaml
+    # 2. Apply the Kubernetes manifest
+    - kubectl apply -f k8s/
+    # 3. Wait for the deployment to roll out
+    - kubectl rollout status deployment/$SERVICE_NAME -w --timeout=5m
+  environment:
+    name: $CI_ENVIRONMENT_NAME
+    url: https://$CI_ENVIRONMENT_SLUG.example.com # Replace with actual URL
+    on_stop: stop_review
+    action: start
+  # Required for Kubernetes deployment using the GitLab Agent
+  # Assumes the agent is configured and a KUBE_CONFIG variable is set
+  variables:
+    KUBECONFIG: $KUBE_CONFIG
+  
+# Staging Deployment (Automatic for all branches except main)
+deploy_staging:
+  <<: *deploy_definition
+  variables:
+    CI_ENVIRONMENT_NAME: staging
+    CI_ENVIRONMENT_SLUG: staging
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: on_success
+
+# Production Deployment (Manual for main branch)
+deploy_production:
+  <<: *deploy_definition
+  variables:
+    CI_ENVIRONMENT_NAME: production
+    CI_ENVIRONMENT_SLUG: production
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual # Manual trigger for production safety
+
+# ----------------------------------------------------------------------
+# 7. Rollback Capabilities (Manual Rollback Job)
+# ----------------------------------------------------------------------
+# This job allows a manual rollback to the previous successful deployment
+rollback_production:
+  stage: deploy
+  image:
+    name: bitnami/kubectl:latest
+    entrypoint: [""]
+  script:
+    - echo "Manually rolling back production deployment..."
+    # Rollback to the previous revision
+    - kubectl rollout undo deployment/$SERVICE_NAME
+    - kubectl rollout status deployment/$SERVICE_NAME -w --timeout=5m
+  environment:
+    name: production
+    action: rollback
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: false
+
+# ----------------------------------------------------------------------
+# 8. Notifications on Success/Failure
+# ----------------------------------------------------------------------
+# Example job for sending a notification (e.g., to Slack)
+# Requires a pre-configured NOTIFICATION_WEBHOOK variable
+notify_success:
+  stage: notify
+  image: curlimages/curl:latest
+  script:
+    - |
+      curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"✅ Pipeline for $CI_PROJECT_NAME on branch $CI_COMMIT_REF_NAME succeeded! Deployment to $CI_ENVIRONMENT_NAME complete. Pipeline: $CI_PIPELINE_URL\"}" $NOTIFICATION_WEBHOOK
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_success
+      
+notify_failure:
+  stage: notify
+  image: curlimages/curl:latest
+  script:
+    - |
+      curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"❌ Pipeline for $CI_PROJECT_NAME on branch $CI_COMMIT_REF_NAME failed! Check pipeline: $CI_PIPELINE_URL\"}" $NOTIFICATION_WEBHOOK
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+      when: on_failure
+
+# ----------------------------------------------------------------------
+# 9. Cleanup Job (Optional but recommended for review apps)
+# ----------------------------------------------------------------------
+stop_review:
+  stage: deploy
+  environment:
+    name: $CI_ENVIRONMENT_NAME
+    action: stop
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: manual
+  image:
+    name: bitnami/kubectl:latest
+    entrypoint: [""]
+  script:
+    - echo "Stopping review environment $CI_ENVIRONMENT_SLUG..."
+    # Example cleanup: delete the Kubernetes deployment and service
+    - kubectl delete deployment $SERVICE_NAME-$CI_ENVIRONMENT_SLUG
+    - kubectl delete service $SERVICE_NAME-$CI_ENVIRONMENT_SLUG

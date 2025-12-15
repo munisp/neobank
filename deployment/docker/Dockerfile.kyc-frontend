@@ -1,0 +1,75 @@
+# Stage 1: Dependency Installation (Base)
+# Use a Node.js 20 base image for dependency installation
+FROM node:20-alpine AS base
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies for the build stage
+# Copy package.json and package-lock.json to leverage Docker cache
+COPY package.json package-lock.json ./
+
+# Install dependencies
+# Use 'npm ci' for clean, reproducible installs
+RUN npm ci
+
+# Stage 2: Builder
+# Use the base stage to build the application
+FROM base AS builder
+
+# Copy source code
+COPY . .
+
+# Build the Next.js application
+# NEXT_TELEMETRY_DISABLED=1 is a common practice to disable telemetry during build
+RUN NEXT_TELEMETRY_DISABLED=1 npm run build
+
+# Stage 3: Runner (Production)
+# Use a minimal, secure base image for the final production container
+# node:20-alpine is still a good choice for a minimal Node.js environment
+FROM node:20-alpine AS runner
+
+# Set working directory
+WORKDIR /app
+
+# Create a non-root user for security best practices
+# Next.js recommends 'nextjs' user with UID 1001
+RUN addgroup --system --gid 1001 nextjs
+RUN adduser --system --uid 1001 nextjs
+
+# Copy necessary files from the builder stage
+# 1. Production dependencies (node_modules)
+COPY --from=base /app/node_modules ./node_modules
+# 2. Built application files (.next)
+COPY --from=builder /app/.next ./.next
+# 3. Public assets
+COPY --from=builder /app/public ./public
+# 4. package.json (for 'next start' command)
+COPY --from=builder /app/package.json ./package.json
+
+# Set permissions for the non-root user
+# The .next/cache folder needs to be writable by the user
+RUN chown -R nextjs:nextjs /app
+RUN chmod -R 755 /app
+RUN mkdir -p .next/cache
+RUN chown -R nextjs:nextjs .next/cache
+
+# Switch to the non-root user
+USER nextjs
+
+# Expose the port the Next.js server runs on
+EXPOSE 3000
+
+# Set environment variables for Next.js
+# HOSTNAME is required for Next.js to listen on all interfaces (0.0.0.0)
+ENV NODE_ENV production
+ENV PORT 3000
+ENV HOSTNAME 0.0.0.0
+
+# Health Check (Requirement 3)
+# Checks if the server is running and responding to requests
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -q -O /dev/null http://localhost:3000/ || exit 1
+
+# Start the Next.js production server
+CMD ["npm", "start"] # Assuming "start" script is "next start" in package.json

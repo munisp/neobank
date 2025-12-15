@@ -1,0 +1,57 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: production-ingress
+  annotations:
+    # 1. Nginx Ingress Controller Class
+    kubernetes.io/ingress.class: "nginx"
+    # or use ingressClassName: nginx in spec
+    
+    # 2. cert-manager annotations for automatic TLS
+    cert-manager.io/cluster-issuer: "letsencrypt-prod" # Assumes a ClusterIssuer named 'letsencrypt-prod' is set up
+    nginx.ingress.kubernetes.io/ssl-redirect: "true" # Enforce HTTPS
+    
+    # 3. Production-grade Nginx configuration
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
+    nginx.ingress.ingress.kubernetes.io/proxy-send-timeout: "180"
+    
+    # 4. Monitoring/Logging annotations (Example for Prometheus/Grafana)
+    # prometheus.io/scrape: "true"
+    # prometheus.io/port: "10254" # Nginx Ingress Controller metrics port
+    
+    # 5. Security Headers (Optional but recommended for production)
+    # nginx.ingress.kubernetes.io/configuration-snippet: |
+    #   more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+    #   more_set_headers "X-Content-Type-Options: nosniff";
+    #   more_set_headers "X-Frame-Options: DENY";
+    #   more_set_headers "X-XSS-Protection: 1; mode=block";
+    
+spec:
+  # Use ingressClassName if your K8s version supports it (1.18+)
+  # ingressClassName: nginx
+  
+  tls:
+  - hosts:
+    - example.com # REPLACE_WITH_YOUR_DOMAIN
+    secretName: example-com-tls # cert-manager will store the certificate here
+    
+  rules:
+  - host: example.com # REPLACE_WITH_YOUR_DOMAIN
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service # REPLACE_WITH_YOUR_API_SERVICE_NAME
+            port:
+              number: 8080 # REPLACE_WITH_YOUR_API_SERVICE_PORT
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend-service # REPLACE_WITH_YOUR_FRONTEND_SERVICE_NAME
+            port:
+              number: 80 # REPLACE_WITH_YOUR_FRONTEND_SERVICE_PORT
+      # Add more rules for other services here

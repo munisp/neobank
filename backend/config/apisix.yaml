@@ -1,0 +1,53 @@
+apisix:
+  # Enable APISIX
+  enable: true
+
+  # Upstream configuration for NeoBank backend
+  upstreams:
+    - name: neobank_backend
+      nodes:
+        "neobank-backend:8000": 1
+
+  # Routes configuration
+  routes:
+    # Authentication endpoints
+    - uri: /api/auth/*
+      upstream_id: neobank_backend
+      plugins:
+        # Rate limiting for authentication
+        limit-conn:
+          conn: 10
+          burst: 5
+          default_conn_delay: 0.1
+        # JWT authentication
+        jwt-auth:
+          key: "${JWT_SECRET_KEY}"
+
+    # Transaction endpoints
+    - uri: /api/transactions/*
+      upstream_id: neobank_backend
+      plugins:
+        # Rate limiting for transactions
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "remote_addr"
+        # OPA policy enforcement
+        opa:
+          host: "http://opa:8181"
+          policy: "neobank/transactions"
+
+    # KYC endpoints
+    - uri: /api/kyc/*
+      upstream_id: neobank_backend
+      plugins:
+        # Rate limiting for KYC
+        limit-req:
+          rate: 20
+          burst: 10
+          key: "remote_addr"
+
+    # Default route for all other endpoints
+    - uri: /*
+      upstream_id: neobank_backend
+

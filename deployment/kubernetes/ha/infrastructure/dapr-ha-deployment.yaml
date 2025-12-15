@@ -1,0 +1,355 @@
+---
+# Dapr High Availability Configuration
+# Production-ready Dapr sidecar injection with HA control plane
+# Version: 1.0.0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dapr-system
+  labels:
+    name: dapr-system
+    environment: production
+
+---
+# Dapr Configuration for HA
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: neobank-dapr-config
+  namespace: dapr-system
+spec:
+  tracing:
+    samplingRate: "1"
+    zipkin:
+      endpointAddress: http://zipkin.monitoring:9411/api/v2/spans
+  metrics:
+    enabled: true
+  mtls:
+    enabled: true
+    workloadCertTTL: 24h
+    allowedClockSkew: 15m
+  accessControl:
+    defaultAction: deny
+    trustDomain: "neobank.local"
+    policies:
+      - appId: backend-api
+        defaultAction: allow
+        trustDomain: "neobank.local"
+        namespace: "neobank-production"
+      - appId: kyc-service
+        defaultAction: allow
+        trustDomain: "neobank.local"
+        namespace: "neobank-production"
+      - appId: transaction-service
+        defaultAction: allow
+        trustDomain: "neobank.local"
+        namespace: "neobank-production"
+  features:
+    - name: ServiceInvocation.Resiliency
+      enabled: true
+    - name: Actor.Reentrancy
+      enabled: true
+  httpPipeline:
+    handlers:
+      - name: ratelimit
+        type: middleware.http.ratelimit
+      - name: oauth2
+        type: middleware.http.oauth2
+
+---
+# Dapr Resiliency Policy
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: neobank-resiliency
+  namespace: dapr-system
+spec:
+  policies:
+    timeouts:
+      general: 30s
+      critical: 60s
+      bulk: 120s
+    retries:
+      retryForever:
+        policy: constant
+        duration: 5s
+        maxRetries: -1
+      important:
+        policy: exponential
+        maxInterval: 15s
+        maxRetries: 10
+      default:
+        policy: constant
+        duration: 1s
+        maxRetries: 3
+    circuitBreakers:
+      simpleCB:
+        maxRequests: 1
+        interval: 30s
+        timeout: 60s
+        trip: consecutiveFailures >= 5
+      aggressiveCB:
+        maxRequests: 1
+        interval: 60s
+        timeout: 120s
+        trip: consecutiveFailures >= 3
+  targets:
+    apps:
+      backend-api:
+        timeout: general
+        retry: important
+        circuitBreaker: simpleCB
+      kyc-service:
+        timeout: critical
+        retry: important
+        circuitBreaker: simpleCB
+      transaction-service:
+        timeout: critical
+        retry: retryForever
+        circuitBreaker: aggressiveCB
+    components:
+      statestore:
+        outbound:
+          timeout: general
+          retry: important
+          circuitBreaker: simpleCB
+      pubsub:
+        outbound:
+          timeout: general
+          retry: important
+          circuitBreaker: simpleCB
+
+---
+# Dapr State Store Component (Redis HA)
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  namespace: dapr-system
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: redis-cluster.redis:6379
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: redis-password
+    - name: enableTLS
+      value: "true"
+    - name: failover
+      value: "true"
+    - name: sentinelMasterName
+      value: "mymaster"
+    - name: maxRetries
+      value: "5"
+    - name: maxRetryBackoff
+      value: "2s"
+  auth:
+    secretStore: kubernetes
+
+---
+# Dapr Pub/Sub Component (Kafka HA)
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+  namespace: dapr-system
+spec:
+  type: pubsub.kafka
+  version: v1
+  metadata:
+    - name: brokers
+      value: neobank-kafka-cluster-kafka-bootstrap.kafka:9092
+    - name: consumerGroup
+      value: neobank-consumer-group
+    - name: authType
+      value: "mtls"
+    - name: maxMessageBytes
+      value: "1048576"
+    - name: consumeRetryInterval
+      value: "1s"
+    - name: version
+      value: "3.6.0"
+    - name: initialOffset
+      value: "oldest"
+    - name: disableTls
+      value: "false"
+
+---
+# Dapr Secrets Component (Kubernetes)
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: kubernetes-secrets
+  namespace: dapr-system
+spec:
+  type: secretstores.kubernetes
+  version: v1
+  metadata: []
+
+---
+# Dapr Sidecar Injector Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dapr-sidecar-injector-config
+  namespace: dapr-system
+data:
+  config: |
+    {
+      "sidecarImage": "daprio/daprd:1.12.0",
+      "sidecarImagePullPolicy": "IfNotPresent",
+      "namespace": "dapr-system",
+      "kubeClusterDomain": "cluster.local",
+      "sidecarCPURequest": "100m",
+      "sidecarCPULimit": "500m",
+      "sidecarMemoryRequest": "128Mi",
+      "sidecarMemoryLimit": "512Mi",
+      "sidecarLogLevel": "info",
+      "sidecarMaxConcurrency": -1,
+      "sidecarListenAddresses": "0.0.0.0",
+      "sidecarPublicPort": "3501",
+      "sidecarHTTPPort": "3500",
+      "sidecarGRPCPort": "50001",
+      "sidecarInternalGRPCPort": "50002",
+      "sidecarMetricsPort": "9090"
+    }
+
+---
+# Dapr Placement Service (HA)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dapr-placement-server
+  namespace: dapr-system
+  labels:
+    app: dapr-placement-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dapr-placement-server
+  template:
+    metadata:
+      labels:
+        app: dapr-placement-server
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - dapr-placement-server
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: dapr-placement-server
+          image: daprio/dapr:1.12.0
+          args:
+            - "./placement"
+            - "--port"
+            - "50005"
+            - "--healthz-port"
+            - "8080"
+            - "--metrics-port"
+            - "9090"
+            - "--initial-cluster"
+            - "dapr-placement-server-0=dapr-placement-server-0.dapr-placement-server-headless.dapr-system.svc.cluster.local:8201,dapr-placement-server-1=dapr-placement-server-1.dapr-placement-server-headless.dapr-system.svc.cluster.local:8201,dapr-placement-server-2=dapr-placement-server-2.dapr-placement-server-headless.dapr-system.svc.cluster.local:8201"
+          ports:
+            - containerPort: 50005
+              name: api
+            - containerPort: 8080
+              name: healthz
+            - containerPort: 9090
+              name: metrics
+            - containerPort: 8201
+              name: raft
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+# Dapr Placement Service (Headless)
+apiVersion: v1
+kind: Service
+metadata:
+  name: dapr-placement-server-headless
+  namespace: dapr-system
+spec:
+  clusterIP: None
+  selector:
+    app: dapr-placement-server
+  ports:
+    - port: 50005
+      targetPort: 50005
+      name: api
+    - port: 8201
+      targetPort: 8201
+      name: raft
+
+---
+# Dapr Placement Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: dapr-placement-server
+  namespace: dapr-system
+spec:
+  selector:
+    app: dapr-placement-server
+  ports:
+    - port: 50005
+      targetPort: 50005
+      name: api
+
+---
+# PodDisruptionBudget for Dapr Placement
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dapr-placement-pdb
+  namespace: dapr-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: dapr-placement-server
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dapr-monitor
+  namespace: dapr-system
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: dapr-placement-server
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics

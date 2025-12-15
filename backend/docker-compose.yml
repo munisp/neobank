@@ -1,0 +1,249 @@
+version: '3.8'
+
+services:
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      target: development
+    container_name: neobank_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://neobank:secure_password_123@postgres:5432/neobank_development
+      - REDIS_URL=redis://:redis_password_123@redis:6379/0
+      - JWT_SECRET_KEY=development_jwt_secret_key_change_in_production
+      - SECRET_KEY=development_secret_key_change_in_production
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - TIGERBEETLE_URL=http://tigerbeetle:8001
+      - FRAUD_DETECTION_URL=http://fraud-detection:8002
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # Frontend Application
+  frontend:
+    build:
+      context: ./neobank-frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: neobank_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000/api
+      - VITE_APP_NAME=NeoBank
+      - NODE_ENV=development
+    volumes:
+      - ./neobank-frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: neobank_postgres
+    environment:
+      POSTGRES_DB: neobank_development
+      POSTGRES_USER: neobank
+      POSTGRES_PASSWORD: secure_password_123
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neobank -d neobank_development"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: neobank_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass redis_password_123
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # TigerBeetle Accounting System
+  tigerbeetle:
+    image: tigerbeetle/tigerbeetle:latest
+    container_name: neobank_tigerbeetle
+    ports:
+      - "8001:8001"
+    volumes:
+      - tigerbeetle_data:/data
+    command: start --addresses=0.0.0.0:8001 /data/cluster_0.tigerbeetle
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: neobank_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # Grafana Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: neobank_grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # OpenAppSec Security
+  openappsec:
+    image: openappsec/openappsec:latest
+    container_name: neobank_openappsec
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./security/openappsec-config.yaml:/etc/openappsec/openappsec.yaml
+    environment:
+      - OPENAPPSEC_MODE=learning
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # Wazuh SIEM Agent
+  wazuh-agent:
+    image: wazuh/wazuh-agent:latest
+    container_name: neobank_wazuh_agent
+    environment:
+      - WAZUH_MANAGER=wazuh-manager
+      - WAZUH_AGENT_GROUP=neobank
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # OpenCTI Threat Intelligence (simplified)
+  opencti-redis:
+    image: redis:7-alpine
+    container_name: neobank_opencti_redis
+    volumes:
+      - opencti_redis_data:/data
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  opencti:
+    image: opencti/platform:latest
+    container_name: neobank_opencti
+    environment:
+      - APP__PORT=8080
+      - APP__BASE_URL=http://localhost:8080
+      - APP__ADMIN__EMAIL=admin@neobank.ng
+      - APP__ADMIN__PASSWORD=admin123
+      - APP__ADMIN__TOKEN=opencti_admin_token
+      - APP__LOGS_LEVEL=info
+      - REDIS__HOSTNAME=opencti-redis
+      - REDIS__PORT=6379
+    ports:
+      - "8080:8080"
+    depends_on:
+      - opencti-redis
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: neobank_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - neobank_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  tigerbeetle_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  opencti_redis_data:
+    driver: local
+
+networks:
+  neobank_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

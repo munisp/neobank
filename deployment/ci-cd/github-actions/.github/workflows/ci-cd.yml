@@ -1,0 +1,270 @@
+name: CI/CD Pipeline for PWA
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  K8S_NAMESPACE: pwa-app
+
+jobs:
+  # =================================================================
+  # 1. CI Job: Lint, Test, Build PWA
+  # =================================================================
+  ci:
+    name: CI - Lint, Test, Build
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set_tag.outputs.tag }}
+      build_artifact: build-dist-${{ steps.set_tag.outputs.tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Get npm cache directory
+        id: npm-cache-dir
+        run: echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
+
+      - name: Cache node modules
+        uses: actions/cache@v4
+        id: npm-cache
+        with:
+          path: ${{ steps.npm-cache-dir.outputs.dir }}
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Lint
+        run: npm run lint
+
+      - name: Run Tests
+        run: npm run test -- --coverage # Assuming a test script is defined
+
+      - name: Build PWA (Vite)
+        run: npm run build # Assuming this outputs to 'dist' directory
+
+      - name: Set Image Tag
+        id: set_tag
+        run: |
+          TAG=${{ github.sha }}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Upload PWA build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.set_tag.outputs.tag }}-pwa-dist
+          path: dist/
+          retention-days: 1
+
+  # =================================================================
+  # 2. Docker Build and Push Job
+  # =================================================================
+  build-and-push:
+    name: Docker Build and Push
+    runs-on: ubuntu-latest
+    needs: ci
+    if: github.ref == 'refs/heads/main' # Only run on push to main
+    outputs:
+      image_tag: ${{ needs.ci.outputs.image_tag }}
+      image_uri: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.ci.outputs.image_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download PWA build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.ci.outputs.image_tag }}-pwa-dist
+          path: dist/
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=${{ needs.ci.outputs.image_tag }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =================================================================
+  # 3. Security Scanning Job (Trivy)
+  # =================================================================
+  security-scan:
+    name: Security Scan (Trivy)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: always() && github.ref == 'refs/heads/main' # Run even if build-and-push fails, but only on main
+    
+    steps:
+      - name: Run Trivy vulnerability scanner on image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-and-push.outputs.image_uri }}
+          format: 'table'
+          exit-code: '1' # Fail the job if any critical vulnerabilities are found
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  # =================================================================
+  # 4. Deployment to Staging Environment
+  # =================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-and-push, security-scan]
+    if: success() && github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: https://staging.pwa.example.com # Replace with actual staging URL
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Kustomize
+        uses: kodermax/setup-kustomize@v1
+        with:
+          kustomize-version: '4.5.7' # Use a specific version
+
+      - name: Update K8s manifest with new image tag
+        run: |
+          # Assuming k8s manifests are in a 'k8s' directory
+          # and a kustomization.yaml is present
+          kustomize edit set image APP_IMAGE=${{ needs.build-and-push.outputs.image_uri }} -k k8s/staging
+
+      - name: Deploy to Staging Kubernetes Cluster
+        uses: azure/k8s-deploy@v4 # Use a generic K8s deploy action
+        with:
+          action: deploy
+          manifests: k8s/staging/
+          images: ${{ needs.build-and-push.outputs.image_uri }}
+          namespace: ${{ env.K8S_NAMESPACE }}-staging
+          # KUBECONFIG is expected to be set as a secret in the 'staging' environment
+
+      - name: Enable Rollback (Record deployment history)
+        run: |
+          echo "Rollback is enabled by the K8s deployment action which records history."
+          echo "To rollback, a manual step or a separate workflow would use 'kubectl rollout undo deployment/pwa-deployment -n ${{ env.K8S_NAMESPACE }}-staging'"
+
+  # =================================================================
+  # 5. Deployment to Production Environment
+  # =================================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: success() && github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://pwa.example.com # Replace with actual production URL
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Kustomize
+        uses: kodermax/setup-kustomize@v1
+        with:
+          kustomize-version: '4.5.7'
+
+      - name: Update K8s manifest with new image tag
+        run: |
+          kustomize edit set image APP_IMAGE=${{ needs.build-and-push.outputs.image_uri }} -k k8s/production
+
+      - name: Deploy to Production Kubernetes Cluster
+        uses: azure/k8s-deploy@v4
+        with:
+          action: deploy
+          manifests: k8s/production/
+          images: ${{ needs.build-and-push.outputs.image_uri }}
+          namespace: ${{ env.K8S_NAMESPACE }}-production
+          # KUBECONFIG is expected to be set as a secret in the 'production' environment
+
+      - name: Enable Rollback (Record deployment history)
+        run: |
+          echo "Rollback is enabled by the K8s deployment action which records history."
+          echo "To rollback, a manual step or a separate workflow would use 'kubectl rollout undo deployment/pwa-deployment -n ${{ env.K8S_NAMESPACE }}-production'"
+
+  # =================================================================
+  # 6. Notifications Job
+  # =================================================================
+  notify:
+    name: Notification
+    runs-on: ubuntu-latest
+    needs: [ci, build-and-push, deploy-staging, deploy-production]
+    if: always() # Always run to send success/failure notification
+
+    steps:
+      - name: Determine Status
+        id: status
+        run: |
+          if [[ ${{ needs.deploy-production.result }} == 'success' ]]; then
+            STATUS='SUCCESS'
+            MESSAGE='✅ Production deployment complete.'
+          elif [[ ${{ needs.deploy-staging.result }} == 'success' ]]; then
+            STATUS='SUCCESS (Staging Only)'
+            MESSAGE='⚠️ Staging deployment complete, but Production failed or was skipped.'
+          elif [[ ${{ needs.build-and-push.result }} == 'success' ]]; then
+            STATUS='FAILURE (Deployment)'
+            MESSAGE='❌ Build and Push succeeded, but deployment failed.'
+          elif [[ ${{ needs.ci.result }} == 'success' ]]; then
+            STATUS='FAILURE (Build/Push)'
+            MESSAGE='❌ CI succeeded, but Docker Build/Push failed.'
+          else
+            STATUS='FAILURE (CI)'
+            MESSAGE='❌ CI failed (Lint/Test/Build).'
+          fi
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "message=$MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: Send Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }} # Secret for Slack webhook URL
+          SLACK_MESSAGE: |
+            *PWA CI/CD Status: ${{ steps.status.outputs.status }}*
+            ${{ steps.status.outputs.message }}
+            Workflow: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#${{ github.run_number }}>
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+          SLACK_TITLE: CI/CD Workflow Run
+          SLACK_COLOR: ${{ (steps.status.outputs.status == 'SUCCESS') && 'good' || 'danger' }}
+          SLACK_USERNAME: GitHub Actions
+          SLACK_ICON_EMOJI: ':github:'
+          SLACK_CHANNEL: '#devops-notifications' # Optional: specify a channel

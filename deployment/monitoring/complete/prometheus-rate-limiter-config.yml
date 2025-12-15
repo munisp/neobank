@@ -1,0 +1,85 @@
+# Prometheus Configuration for Rate Limiter Metrics
+# Add this to your prometheus.yml file
+
+global:
+  scrape_interval: 15s  # Scrape metrics every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+  external_labels:
+    cluster: 'neobank-production'
+    environment: 'production'
+
+# Scrape configurations
+scrape_configs:
+  # NeoBank Backend API - Rate Limiter Metrics
+  - job_name: 'neobank-backend-rate-limiter'
+    metrics_path: '/metrics'
+    scrape_interval: 10s  # More frequent scraping for rate limiter
+    scrape_timeout: 5s
+    
+    static_configs:
+      - targets:
+          - 'backend-api-1:8000'
+          - 'backend-api-2:8000'
+          - 'backend-api-3:8000'
+        labels:
+          service: 'neobank-backend'
+          component: 'rate-limiter'
+    
+    # Relabeling for better organization
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__address__]
+        regex: '([^:]+).*'
+        target_label: host
+        replacement: '$1'
+  
+  # Kubernetes Service Discovery (if using Kubernetes)
+  - job_name: 'kubernetes-neobank-backend'
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+            - neobank-production
+    
+    relabel_configs:
+      # Only scrape pods with the correct annotations
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      
+      # Use the pod's metrics path
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      
+      # Use the pod's port
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      
+      # Add pod labels
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      
+      # Add namespace
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: kubernetes_namespace
+      
+      # Add pod name
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: kubernetes_pod_name
+
+# Alerting rules
+rule_files:
+  - 'rate_limiter_alerts.yml'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'

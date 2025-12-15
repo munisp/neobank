@@ -1,0 +1,75 @@
+# --- STAGE 1: Builder ---
+# Use a full Python image for building, as it includes necessary tools like pip and a compiler
+FROM python:3.11-slim AS builder
+
+# Set environment variables
+ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE 1
+
+# Install build dependencies
+# We use a separate step for installing system dependencies that are needed for building
+# Python packages (e.g., for packages like psycopg2 or numpy).
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y \
+    gcc \
+    libc-dev \
+    musl-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy only the dependency files to leverage Docker layer caching
+# Assuming requirements.txt is the dependency file
+COPY requirements.txt .
+
+# Install Python dependencies
+# This layer is cached as long as requirements.txt doesn't change
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# --- STAGE 2: Production Image ---
+# Use a minimal base image for the final production image (security and size optimization)
+FROM python:3.11-slim AS final
+
+# Security Best Practice: Create a non-root user
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+
+# Set environment variables for production
+ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PORT 8000
+
+# Set working directory
+WORKDIR /app
+
+# Copy installed packages from the builder stage
+# This is the key to the multi-stage build: only copy the necessary artifacts
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/gunicorn
+# Note: curl is needed for the healthcheck, so we install it in the builder stage and it's available in the final image's base.
+
+# Copy application source code
+# This layer should be the last one to benefit from caching
+COPY . /app
+
+# Security Best Practice: Change ownership to the non-root user
+RUN chown -R appuser:appgroup /app
+
+# Switch to the non-root user
+USER appuser
+
+# Expose the port
+EXPOSE 8000
+
+# Health Check (Requirement 3)
+# Assumes the FastAPI app has a /health endpoint
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+# Production Command (Requirement 6: Production optimizations)
+# Use Gunicorn with Uvicorn workers for a robust production setup
+# The command assumes the main FastAPI application object is named 'app' in a file named 'main.py'
+# Adjust the 'main:app' part to match the actual file and variable name (e.g., 'src.api:app')
+CMD ["gunicorn", "main:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]

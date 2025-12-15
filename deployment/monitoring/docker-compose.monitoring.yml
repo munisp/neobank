@@ -1,0 +1,180 @@
+# Docker Compose Monitoring Stack for Rate Limiter
+# Includes Prometheus, Grafana, and Alertmanager
+
+version: '3.8'
+
+services:
+  # Prometheus - Metrics collection and alerting
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: neobank-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus-rate-limiter-config.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rate_limiter_alerts.yml:/etc/prometheus/rate_limiter_alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - neobank-monitoring
+    labels:
+      - "com.neobank.service=prometheus"
+      - "com.neobank.component=monitoring"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Alertmanager - Alert routing and notifications
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: neobank-alertmanager
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - neobank-monitoring
+    labels:
+      - "com.neobank.service=alertmanager"
+      - "com.neobank.component=monitoring"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana:10.0.3
+    container_name: neobank-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=neobank_admin_2024
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana-rate-limiter-dashboard.json:/etc/grafana/provisioning/dashboards/rate-limiter.json:ro
+      - ./grafana-provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - neobank-monitoring
+    depends_on:
+      - prometheus
+    labels:
+      - "com.neobank.service=grafana"
+      - "com.neobank.component=monitoring"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Node Exporter - Host metrics
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: neobank-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - neobank-monitoring
+    labels:
+      - "com.neobank.service=node-exporter"
+      - "com.neobank.component=monitoring"
+
+  # Redis Exporter - Redis metrics
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.52.0
+    container_name: neobank-redis-exporter
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    ports:
+      - "9121:9121"
+    networks:
+      - neobank-monitoring
+      - neobank-backend
+    depends_on:
+      - redis
+    labels:
+      - "com.neobank.service=redis-exporter"
+      - "com.neobank.component=monitoring"
+
+  # Redis - Required for rate limiter
+  redis:
+    image: redis:7.2-alpine
+    container_name: neobank-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-neobank_redis_2024}
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - neobank-backend
+      - neobank-monitoring
+    labels:
+      - "com.neobank.service=redis"
+      - "com.neobank.component=cache"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  neobank-monitoring:
+    name: neobank-monitoring
+    driver: bridge
+  neobank-backend:
+    name: neobank-backend
+    driver: bridge
+    external: true  # Assumes backend network already exists
+
+volumes:
+  prometheus-data:
+    name: neobank-prometheus-data
+  alertmanager-data:
+    name: neobank-alertmanager-data
+  grafana-data:
+    name: neobank-grafana-data
+  redis-data:
+    name: neobank-redis-data
+
+# Usage:
+# 1. Create grafana-provisioning directory with datasources and dashboards
+# 2. Create alertmanager.yml with notification configuration
+# 3. Start stack: docker-compose -f docker-compose-monitoring.yml up -d
+# 4. Access Grafana: http://localhost:3000 (admin/neobank_admin_2024)
+# 5. Access Prometheus: http://localhost:9090
+# 6. Access Alertmanager: http://localhost:9093

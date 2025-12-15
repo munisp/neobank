@@ -1,0 +1,773 @@
+---
+# OpenStack High Availability Services Configuration
+# Production-ready OpenStack deployment with HA for core services
+# Version: 1.0.0
+
+# This configuration provides HA setup for OpenStack services
+# Designed for Kolla-Ansible or OpenStack-Helm deployments
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openstack
+  labels:
+    name: openstack
+    environment: production
+
+---
+# MariaDB Galera Cluster for OpenStack
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mariadb-galera
+  namespace: openstack
+  labels:
+    app: mariadb-galera
+spec:
+  serviceName: mariadb-galera-headless
+  replicas: 3
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: mariadb-galera
+  template:
+    metadata:
+      labels:
+        app: mariadb-galera
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - mariadb-galera
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: mariadb
+          image: mariadb:10.11
+          ports:
+            - containerPort: 3306
+              name: mysql
+            - containerPort: 4567
+              name: galera-repl
+            - containerPort: 4568
+              name: galera-ist
+            - containerPort: 4444
+              name: galera-sst
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-secrets
+                  key: root-password
+            - name: MYSQL_DATABASE
+              value: keystone
+            - name: GALERA_CLUSTER_NAME
+              value: openstack-galera
+            - name: GALERA_CLUSTER_ADDRESS
+              value: gcomm://mariadb-galera-0.mariadb-galera-headless,mariadb-galera-1.mariadb-galera-headless,mariadb-galera-2.mariadb-galera-headless
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 120
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - mysql
+                - -h
+                - localhost
+                - -e
+                - "SELECT 1"
+            initialDelaySeconds: 30
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: config
+              mountPath: /etc/mysql/conf.d
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 100Gi
+
+---
+# MariaDB Galera ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-galera-config
+  namespace: openstack
+data:
+  galera.cnf: |
+    [mysqld]
+    binlog_format=ROW
+    default-storage-engine=innodb
+    innodb_autoinc_lock_mode=2
+    bind-address=0.0.0.0
+    
+    # Galera Provider Configuration
+    wsrep_on=ON
+    wsrep_provider=/usr/lib/galera/libgalera_smm.so
+    wsrep_cluster_name="openstack-galera"
+    wsrep_cluster_address="gcomm://mariadb-galera-0.mariadb-galera-headless,mariadb-galera-1.mariadb-galera-headless,mariadb-galera-2.mariadb-galera-headless"
+    
+    # Galera Synchronization Configuration
+    wsrep_sst_method=rsync
+    
+    # InnoDB Configuration
+    innodb_buffer_pool_size=2G
+    innodb_log_file_size=256M
+    innodb_flush_log_at_trx_commit=0
+    innodb_flush_method=O_DIRECT
+    
+    # Connection Configuration
+    max_connections=1000
+    max_allowed_packet=256M
+
+---
+# MariaDB Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-secrets
+  namespace: openstack
+type: Opaque
+stringData:
+  root-password: CHANGE_ME_MARIADB_ROOT_PASSWORD
+
+---
+# MariaDB Galera Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-galera
+  namespace: openstack
+spec:
+  selector:
+    app: mariadb-galera
+  ports:
+    - port: 3306
+      targetPort: 3306
+      name: mysql
+  type: ClusterIP
+
+---
+# MariaDB Galera Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-galera-headless
+  namespace: openstack
+spec:
+  clusterIP: None
+  selector:
+    app: mariadb-galera
+  ports:
+    - port: 3306
+      targetPort: 3306
+      name: mysql
+    - port: 4567
+      targetPort: 4567
+      name: galera-repl
+    - port: 4568
+      targetPort: 4568
+      name: galera-ist
+    - port: 4444
+      targetPort: 4444
+      name: galera-sst
+
+---
+# RabbitMQ Cluster for OpenStack
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: openstack
+  labels:
+    app: rabbitmq
+spec:
+  serviceName: rabbitmq-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - rabbitmq
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.12-management
+          ports:
+            - containerPort: 5672
+              name: amqp
+            - containerPort: 15672
+              name: management
+            - containerPort: 4369
+              name: epmd
+            - containerPort: 25672
+              name: clustering
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: openstack
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: rabbitmq-secrets
+                  key: password
+            - name: RABBITMQ_ERLANG_COOKIE
+              valueFrom:
+                secretKeyRef:
+                  name: rabbitmq-secrets
+                  key: erlang-cookie
+            - name: K8S_SERVICE_NAME
+              value: rabbitmq-headless
+            - name: RABBITMQ_USE_LONGNAME
+              value: "true"
+            - name: RABBITMQ_NODENAME
+              value: rabbit@$(HOSTNAME).rabbitmq-headless.openstack.svc.cluster.local
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            exec:
+              command:
+                - rabbitmq-diagnostics
+                - -q
+                - ping
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command:
+                - rabbitmq-diagnostics
+                - -q
+                - check_running
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+            - name: config
+              mountPath: /etc/rabbitmq/conf.d
+      volumes:
+        - name: config
+          configMap:
+            name: rabbitmq-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 20Gi
+
+---
+# RabbitMQ ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: openstack
+data:
+  10-defaults.conf: |
+    cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+    cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+    cluster_formation.k8s.address_type = hostname
+    cluster_formation.k8s.service_name = rabbitmq-headless
+    cluster_formation.k8s.hostname_suffix = .rabbitmq-headless.openstack.svc.cluster.local
+    cluster_formation.node_cleanup.interval = 30
+    cluster_formation.node_cleanup.only_log_warning = true
+    cluster_partition_handling = autoheal
+    queue_master_locator = min-masters
+    vm_memory_high_watermark.relative = 0.8
+    disk_free_limit.relative = 1.5
+
+---
+# RabbitMQ Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbitmq-secrets
+  namespace: openstack
+type: Opaque
+stringData:
+  password: CHANGE_ME_RABBITMQ_PASSWORD
+  erlang-cookie: CHANGE_ME_RABBITMQ_ERLANG_COOKIE
+
+---
+# RabbitMQ Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: openstack
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+    - port: 5672
+      targetPort: 5672
+      name: amqp
+    - port: 15672
+      targetPort: 15672
+      name: management
+  type: ClusterIP
+
+---
+# RabbitMQ Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-headless
+  namespace: openstack
+spec:
+  clusterIP: None
+  selector:
+    app: rabbitmq
+  ports:
+    - port: 5672
+      targetPort: 5672
+      name: amqp
+    - port: 4369
+      targetPort: 4369
+      name: epmd
+    - port: 25672
+      targetPort: 25672
+      name: clustering
+
+---
+# Memcached Deployment for OpenStack
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memcached
+  namespace: openstack
+  labels:
+    app: memcached
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: memcached
+  template:
+    metadata:
+      labels:
+        app: memcached
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - memcached
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: memcached
+          image: memcached:1.6-alpine
+          args:
+            - -m
+            - "1024"
+            - -c
+            - "4096"
+            - -I
+            - "16m"
+          ports:
+            - containerPort: 11211
+              name: memcached
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          livenessProbe:
+            tcpSocket:
+              port: 11211
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 11211
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+# Memcached Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: memcached
+  namespace: openstack
+spec:
+  selector:
+    app: memcached
+  ports:
+    - port: 11211
+      targetPort: 11211
+      name: memcached
+  type: ClusterIP
+
+---
+# Keystone Deployment (HA)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keystone
+  namespace: openstack
+  labels:
+    app: keystone
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: keystone
+  template:
+    metadata:
+      labels:
+        app: keystone
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - keystone
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: keystone
+          image: kolla/keystone:2023.2
+          ports:
+            - containerPort: 5000
+              name: public
+            - containerPort: 35357
+              name: admin
+          env:
+            - name: KOLLA_CONFIG_STRATEGY
+              value: COPY_ALWAYS
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /v3
+              port: 5000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /v3
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/keystone
+      volumes:
+        - name: config
+          configMap:
+            name: keystone-config
+
+---
+# Keystone Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: keystone
+  namespace: openstack
+spec:
+  selector:
+    app: keystone
+  ports:
+    - port: 5000
+      targetPort: 5000
+      name: public
+    - port: 35357
+      targetPort: 35357
+      name: admin
+  type: ClusterIP
+
+---
+# HAProxy for OpenStack API Load Balancing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-openstack
+  namespace: openstack
+  labels:
+    app: haproxy-openstack
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: haproxy-openstack
+  template:
+    metadata:
+      labels:
+        app: haproxy-openstack
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - haproxy-openstack
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: haproxy
+          image: haproxy:2.8-alpine
+          ports:
+            - containerPort: 5000
+              name: keystone
+            - containerPort: 8774
+              name: nova
+            - containerPort: 9292
+              name: glance
+            - containerPort: 9696
+              name: neutron
+            - containerPort: 8776
+              name: cinder
+            - containerPort: 8080
+              name: swift
+            - containerPort: 8004
+              name: heat
+            - containerPort: 8778
+              name: placement
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8405
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/etc/haproxy/haproxy.cfg
+              subPath: haproxy.cfg
+      volumes:
+        - name: config
+          configMap:
+            name: haproxy-openstack-config
+
+---
+# HAProxy OpenStack ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-openstack-config
+  namespace: openstack
+data:
+  haproxy.cfg: |
+    global
+        log stdout format raw local0
+        maxconn 4096
+    
+    defaults
+        log global
+        mode http
+        option httplog
+        option dontlognull
+        timeout connect 5s
+        timeout client 30s
+        timeout server 30s
+        retries 3
+    
+    frontend stats
+        bind *:8405
+        mode http
+        stats enable
+        stats uri /stats
+        stats refresh 10s
+        monitor-uri /healthz
+    
+    frontend keystone
+        bind *:5000
+        default_backend keystone_servers
+    
+    backend keystone_servers
+        balance roundrobin
+        option httpchk GET /v3
+        server keystone-0 keystone:5000 check
+    
+    frontend nova
+        bind *:8774
+        default_backend nova_servers
+    
+    backend nova_servers
+        balance roundrobin
+        option httpchk GET /
+        server nova-0 nova-api:8774 check
+    
+    frontend glance
+        bind *:9292
+        default_backend glance_servers
+    
+    backend glance_servers
+        balance roundrobin
+        option httpchk GET /healthcheck
+        server glance-0 glance-api:9292 check
+    
+    frontend neutron
+        bind *:9696
+        default_backend neutron_servers
+    
+    backend neutron_servers
+        balance roundrobin
+        option httpchk GET /
+        server neutron-0 neutron-server:9696 check
+    
+    frontend cinder
+        bind *:8776
+        default_backend cinder_servers
+    
+    backend cinder_servers
+        balance roundrobin
+        option httpchk GET /
+        server cinder-0 cinder-api:8776 check
+
+---
+# HAProxy OpenStack Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: openstack-api
+  namespace: openstack
+spec:
+  selector:
+    app: haproxy-openstack
+  ports:
+    - port: 5000
+      targetPort: 5000
+      name: keystone
+    - port: 8774
+      targetPort: 8774
+      name: nova
+    - port: 9292
+      targetPort: 9292
+      name: glance
+    - port: 9696
+      targetPort: 9696
+      name: neutron
+    - port: 8776
+      targetPort: 8776
+      name: cinder
+  type: LoadBalancer
+
+---
+# PodDisruptionBudget for MariaDB Galera
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mariadb-galera-pdb
+  namespace: openstack
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: mariadb-galera
+
+---
+# PodDisruptionBudget for RabbitMQ
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rabbitmq-pdb
+  namespace: openstack
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: rabbitmq
+
+---
+# PodDisruptionBudget for Keystone
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: keystone-pdb
+  namespace: openstack
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: keystone
+
+---
+# ServiceMonitor for OpenStack
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openstack-monitor
+  namespace: openstack
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: keystone
+  endpoints:
+    - port: public
+      interval: 30s
+      path: /v3

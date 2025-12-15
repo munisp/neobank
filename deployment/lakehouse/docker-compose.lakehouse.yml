@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # Trino Query Engine for SQL analytics
+  trino:
+    image: trinodb/trino:435
+    container_name: neobank-trino
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino-catalog.properties:/etc/trino/catalog/iceberg.properties:ro
+      - ./trino-config.properties:/etc/trino/config.properties:ro
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - ICEBERG_CATALOG_URI=${ICEBERG_CATALOG_URI:-http://iceberg-rest:8181}
+      - ICEBERG_WAREHOUSE=${ICEBERG_WAREHOUSE:-s3://neobank-lakehouse}
+    depends_on:
+      - iceberg-rest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - neobank-network
+
+  # Apache Spark for batch processing and ML
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: neobank-spark-master
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - ./spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - spark-data:/opt/bitnami/spark/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - neobank-network
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    container_name: neobank-spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=4G
+      - SPARK_WORKER_CORES=2
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - ./spark-defaults.conf:/opt/bitnami/spark/conf/spark-defaults.conf:ro
+      - spark-data:/opt/bitnami/spark/data
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+    networks:
+      - neobank-network
+
+  # Iceberg REST Catalog
+  iceberg-rest:
+    image: tabulario/iceberg-rest:0.10.0
+    container_name: neobank-iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      - CATALOG_WAREHOUSE=${ICEBERG_WAREHOUSE:-s3://neobank-lakehouse}
+      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+      - CATALOG_S3_ENDPOINT=${S3_ENDPOINT:-https://s3.amazonaws.com}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - neobank-network
+
+  # MinIO for local S3-compatible storage (development)
+  minio:
+    image: minio/minio:latest
+    container_name: neobank-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - neobank-network
+
+volumes:
+  spark-data:
+  minio-data:
+
+networks:
+  neobank-network:
+    external: true

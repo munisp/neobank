@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # ===== Backend API (Staging) =====
+  backend-staging:
+    build:
+      context: ../../NEOBANK-UNIFIED-COMPLETE-FINAL/backend
+      dockerfile: Dockerfile
+    container_name: neobank-backend-staging
+    ports:
+      - "8001:8000"
+    environment:
+      - NODE_ENV=staging
+      - DATABASE_URL=${STAGING_DATABASE_URL}
+      - REDIS_URL=${STAGING_REDIS_URL}
+      - JWT_SECRET=${STAGING_JWT_SECRET}
+      - API_KEY=${STAGING_API_KEY}
+      - SMTP_HOST=${STAGING_SMTP_HOST}
+      - SMTP_PORT=${STAGING_SMTP_PORT}
+      - SMTP_USER=${STAGING_SMTP_USER}
+      - SMTP_PASSWORD=${STAGING_SMTP_PASSWORD}
+      - SMS_API_KEY=${STAGING_SMS_API_KEY}
+      - PAYMENT_GATEWAY_KEY=${STAGING_PAYMENT_GATEWAY_KEY}
+      - CORS_ORIGIN=${STAGING_CORS_ORIGIN}
+      - DEBUG=true
+      - LOG_LEVEL=debug
+    depends_on:
+      - postgres-staging
+      - redis-staging
+    networks:
+      - neobank-staging-network
+    restart: unless-stopped
+
+  # ===== Frontend Web (Staging) =====
+  frontend-staging:
+    build:
+      context: ../../NEOBANK-UNIFIED-COMPLETE-FINAL/frontend
+      dockerfile: Dockerfile
+    container_name: neobank-frontend-staging
+    ports:
+      - "3010:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${STAGING_API_URL}
+      - NEXT_PUBLIC_APP_URL=${STAGING_APP_URL}
+      - NODE_ENV=staging
+    depends_on:
+      - backend-staging
+    networks:
+      - neobank-staging-network
+    restart: unless-stopped
+
+  # ===== PWA (Staging) =====
+  pwa-staging:
+    build:
+      context: ../../NEOBANK-UNIFIED-COMPLETE-FINAL/mobile-pwa
+      dockerfile: Dockerfile
+    container_name: neobank-pwa-staging
+    ports:
+      - "5174:80"
+    environment:
+      - VITE_API_URL=${STAGING_API_URL}
+      - VITE_APP_URL=${STAGING_PWA_URL}
+    depends_on:
+      - backend-staging
+    networks:
+      - neobank-staging-network
+    restart: unless-stopped
+
+  # ===== KYC/KYB Frontend (Staging) =====
+  kyc-frontend-staging:
+    build:
+      context: ../../NEOBANK-UNIFIED-COMPLETE-FINAL/kyc-kyb-frontend
+      dockerfile: Dockerfile
+    container_name: neobank-kyc-frontend-staging
+    ports:
+      - "3011:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${STAGING_API_URL}
+      - NEXT_PUBLIC_APP_URL=${STAGING_KYC_APP_URL}
+      - NODE_ENV=staging
+    depends_on:
+      - backend-staging
+    networks:
+      - neobank-staging-network
+    restart: unless-stopped
+
+  # ===== PostgreSQL Database (Staging) =====
+  postgres-staging:
+    image: postgres:15-alpine
+    container_name: neobank-postgres-staging
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=${STAGING_POSTGRES_DB:-neobank_staging}
+      - POSTGRES_USER=${STAGING_POSTGRES_USER:-neobank_staging}
+      - POSTGRES_PASSWORD=${STAGING_POSTGRES_PASSWORD}
+    volumes:
+      - postgres-staging-data:/var/lib/postgresql/data
+    networks:
+      - neobank-staging-network
+    restart: unless-stopped
+
+  # ===== Redis Cache (Staging) =====
+  redis-staging:
+    image: redis:7-alpine
+    container_name: neobank-redis-staging
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes --requirepass ${STAGING_REDIS_PASSWORD}
+    volumes:
+      - redis-staging-data:/data
+    networks:
+      - neobank-staging-network
+    restart: unless-stopped
+
+  # ===== Nginx Reverse Proxy (Staging) =====
+  nginx-staging:
+    image: nginx:alpine
+    container_name: neobank-nginx-staging
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./nginx/nginx.staging.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend-staging
+      - frontend-staging
+      - pwa-staging
+      - kyc-frontend-staging
+    networks:
+      - neobank-staging-network
+    restart: unless-stopped
+
+networks:
+  neobank-staging-network:
+    driver: bridge
+
+volumes:
+  postgres-staging-data:
+  redis-staging-data:

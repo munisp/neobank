@@ -1,0 +1,239 @@
+name: Next.js CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Next.js build cache directory
+  NEXT_CACHE_DIR: .next/cache
+
+jobs:
+  # =================================================================================
+  # 1. CI (Test) Stage: Linting, Unit Tests, and Security Scanning
+  # =================================================================================
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 9. Cache optimization (Next.js build cache)
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NEXT_CACHE_DIR }}
+          key: ${{ runner.os }}-nextjs-cache-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.tsx', '**/*.ts') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-cache-${{ hashFiles('**/package-lock.json') }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Lint
+        run: npm run lint
+
+      # 3. Automated testing
+      - name: Run Tests
+        run: npm run test
+
+      # 8. Security Scanning (Basic - using GitHub's built-in CodeQL)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  # =================================================================================
+  # 2. Build Stage: Next.js Build and Docker Image Creation
+  # =================================================================================
+  build_docker:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # To push to GHCR
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 9. Cache optimization (Restore Next.js build cache)
+      - name: Cache Next.js build (Restore)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NEXT_CACHE_DIR }}
+          key: ${{ runner.os }}-nextjs-cache-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('**/*.[jt]s', '**/*.tsx', '**/*.ts') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-cache-${{ hashFiles('**/package-lock.json') }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Next.js Build
+        run: npm run build
+
+      # 8. Security Scanning (Container Image - Trivy)
+      - name: Run Trivy vulnerability scanner on image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      # 4. Docker image building and pushing
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{isSourceBranch 'main'}}
+            type=sha,format=short
+            type=ref,event=branch
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =================================================================================
+  # 3. Deployment Stage (Staging): Deploy to Kubernetes Staging Environment
+  # =================================================================================
+  deploy_staging:
+    needs: build_docker
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging.example.com # Placeholder URL
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 5. Kubernetes deployment
+      - name: Set up Kubeconfig for Staging
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+      - name: Deploy to Staging Kubernetes
+        uses: azure/k8s-deploy@v1
+        with:
+          action: deploy
+          manifests: |
+            k8s/deployment.yaml
+            k8s/service.yaml
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }}
+
+  # =================================================================================
+  # 4. Deployment Stage (Production): Deploy to Kubernetes Production Environment
+  # =================================================================================
+  deploy_production:
+    needs: deploy_staging # Requires successful staging deployment
+    runs-on: ubuntu-latest
+    # 2. Environment-specific deployments (with manual approval)
+    environment:
+      name: production
+      url: https://production.example.com # Placeholder URL
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 5. Kubernetes deployment
+      - name: Set up Kubeconfig for Production
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+
+      - name: Deploy to Production Kubernetes
+        uses: azure/k8s-deploy@v1
+        with:
+          action: deploy
+          manifests: |
+            k8s/deployment.yaml
+            k8s/service.yaml
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tags }}
+
+  # =================================================================================
+  # 5. Rollback Job: Manually triggered job for emergency rollback
+  # =================================================================================
+  rollback:
+    # 6. Rollback capabilities (manual trigger)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: [deploy_staging, deploy_production]
+    environment:
+      name: production
+    steps:
+      - name: Set up Kubeconfig for Production
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+
+      - name: Rollback Deployment
+        run: |
+          # Assumes the deployment name is 'nextjs-app'
+          kubectl rollout undo deployment/nextjs-app -n default
+          echo "Deployment rollback initiated for nextjs-app."
+
+  # =================================================================================
+  # 6. Notification Job: Send notification on workflow completion
+  # =================================================================================
+  notify:
+    # 7. Notifications on success/failure
+    runs-on: ubuntu-latest
+    needs: [ci, build_docker, deploy_staging, deploy_production]
+    if: always()
+    steps:
+      - name: Send Notification
+        uses: rjstone/slack-notify@v4
+        with:
+          # Requires a Slack webhook secret, e.g., SLACK_WEBHOOK_URL
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
+            CI/CD Workflow Status: ${{ job.status }}
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          channel: '#ci-cd-notifications'
+          icon-emoji: ':rocket:'
+          color: ${{ job.status == 'success' && 'good' || 'danger' }}

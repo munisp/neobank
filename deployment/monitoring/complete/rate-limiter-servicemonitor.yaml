@@ -1,0 +1,211 @@
+# Kubernetes ServiceMonitor for Rate Limiter Metrics
+# Requires Prometheus Operator to be installed
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: neobank-backend-metrics
+  namespace: neobank-production
+  labels:
+    app: neobank-backend
+    component: api
+    monitoring: prometheus
+spec:
+  selector:
+    app: neobank-backend
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: neobank-backend-rate-limiter
+  namespace: neobank-production
+  labels:
+    app: neobank-backend
+    component: rate-limiter
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: neobank-backend
+      monitoring: prometheus
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 10s
+      scrapeTimeout: 5s
+      scheme: http
+      relabelings:
+        # Add custom labels
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+      metricRelabelings:
+        # Keep only rate limiter metrics
+        - sourceLabels: [__name__]
+          regex: 'rate_limit_.*'
+          action: keep
+  namespaceSelector:
+    matchNames:
+      - neobank-production
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: neobank-rate-limiter-alerts
+  namespace: neobank-production
+  labels:
+    app: neobank-backend
+    component: rate-limiter
+    prometheus: kube-prometheus
+spec:
+  groups:
+    - name: rate_limiter_alerts
+      interval: 30s
+      rules:
+        # High rate of 429 errors
+        - alert: HighRateLimitBlocks
+          expr: |
+            rate(rate_limit_blocks_total[5m]) > 10
+          for: 5m
+          labels:
+            severity: warning
+            component: rate-limiter
+            team: security
+          annotations:
+            summary: "High rate of 429 errors on {{ $labels.endpoint }}"
+            description: "Endpoint {{ $labels.endpoint }} is experiencing {{ $value }} rate limit blocks per second over the last 5 minutes."
+            dashboard: "https://grafana.neobank.com/d/rate-limiter"
+            runbook: "https://docs.neobank.com/runbooks/rate-limiter/high-blocks"
+        
+        # Spike in lockouts
+        - alert: RateLimiterLockoutSpike
+          expr: |
+            rate(rate_limit_lockouts_total[5m]) > 5
+          for: 2m
+          labels:
+            severity: warning
+            component: rate-limiter
+            team: security
+          annotations:
+            summary: "Spike in rate limiter lockouts on {{ $labels.endpoint }}"
+            description: "{{ $value }} lockouts per second on {{ $labels.endpoint }}. Possible brute force attack."
+            dashboard: "https://grafana.neobank.com/d/rate-limiter"
+            runbook: "https://docs.neobank.com/runbooks/rate-limiter/lockout-spike"
+        
+        # Many active lockouts
+        - alert: HighActiveLockouts
+          expr: |
+            rate_limit_active_lockouts > 100
+          for: 10m
+          labels:
+            severity: critical
+            component: rate-limiter
+            team: security
+          annotations:
+            summary: "High number of active lockouts: {{ $value }}"
+            description: "There are currently {{ $value }} active lockouts. This may indicate a large-scale attack."
+            dashboard: "https://grafana.neobank.com/d/rate-limiter"
+            runbook: "https://docs.neobank.com/runbooks/rate-limiter/high-lockouts"
+        
+        # Rate limiter check latency
+        - alert: RateLimiterHighLatency
+          expr: |
+            histogram_quantile(0.95, rate(rate_limit_check_duration_seconds_bucket[5m])) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+            component: rate-limiter
+            team: platform
+          annotations:
+            summary: "High rate limiter check latency on {{ $labels.endpoint }}"
+            description: "95th percentile latency is {{ $value }}s. Expected < 0.1s."
+            dashboard: "https://grafana.neobank.com/d/rate-limiter"
+            runbook: "https://docs.neobank.com/runbooks/rate-limiter/high-latency"
+        
+        # Coordinated attack pattern
+        - alert: CoordinatedAttackDetected
+          expr: |
+            (
+              rate(rate_limit_blocks_total{reason="limit_exceeded"}[1m]) > 20
+              and
+              count(rate_limit_active_lockouts > 0) > 10
+            )
+          for: 1m
+          labels:
+            severity: critical
+            component: rate-limiter
+            team: security
+            alert_type: security_incident
+          annotations:
+            summary: "Possible coordinated attack detected"
+            description: "High rate of blocks ({{ $value }}/s) across multiple endpoints with many active lockouts."
+            dashboard: "https://grafana.neobank.com/d/rate-limiter"
+            runbook: "https://docs.neobank.com/runbooks/security/coordinated-attack"
+            action: "IMMEDIATE: Enable additional security measures"
+        
+        # Login endpoint under attack
+        - alert: LoginEndpointUnderAttack
+          expr: |
+            rate(rate_limit_blocks_total{endpoint="/api/v1/auth/login"}[5m]) > 50
+          for: 2m
+          labels:
+            severity: critical
+            component: rate-limiter
+            team: security
+            alert_type: security_incident
+          annotations:
+            summary: "Login endpoint under attack"
+            description: "Login endpoint experiencing {{ $value }} blocks per second."
+            dashboard: "https://grafana.neobank.com/d/rate-limiter"
+            runbook: "https://docs.neobank.com/runbooks/security/login-attack"
+            action: "IMMEDIATE: Investigate and potentially enable additional protections"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-rate-limiter
+  namespace: neobank-production
+  labels:
+    grafana_dashboard: "1"
+data:
+  rate-limiter-dashboard.json: |
+    # Paste contents of grafana-rate-limiter-dashboard.json here
+    # Or use a separate file and mount it as a volume
+---
+# PodMonitor alternative (if not using Services)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: neobank-backend-pods
+  namespace: neobank-production
+  labels:
+    app: neobank-backend
+    component: rate-limiter
+spec:
+  selector:
+    matchLabels:
+      app: neobank-backend
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 10s
+      scrapeTimeout: 5s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+  namespaceSelector:
+    matchNames:
+      - neobank-production

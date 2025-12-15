@@ -1,0 +1,90 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "name": "NeoBank Microservices",
+  "description": "Production-ready deployment configuration for a NeoBank application with Backend API, Frontend, PWA, PostgreSQL, and Redis.",
+  "services": [
+    {
+      "name": "backend-api",
+      "description": "Core business logic and API server.",
+      "source": {
+        "rootDir": "backend",
+        "buildCommand": "npm install && npm run build",
+        "startCommand": "npm start"
+      },
+      "type": "docker",
+      "dockerfile": "backend/Dockerfile",
+      "environment": {
+        "PORT": "3000",
+        "NODE_ENV": "production",
+        "DATABASE_URL": "${{PostgreSQL.DATABASE_URL}}",
+        "REDIS_URL": "${{Redis.REDIS_URL}}",
+        "API_SECRET_KEY": "${{API_SECRET_KEY}}"
+      },
+      "public": true,
+      "healthcheck": {
+        "path": "/health",
+        "port": 3000
+      }
+    },
+    {
+      "name": "frontend",
+      "description": "Main customer-facing web application.",
+      "source": {
+        "rootDir": "frontend",
+        "buildCommand": "npm install && npm run build",
+        "startCommand": "nginx -g 'daemon off;'"
+      },
+      "type": "docker",
+      "dockerfile": "frontend/Dockerfile",
+      "environment": {
+        "PORT": "80",
+        "API_BASE_URL": "https://${{backend-api.RAILWAY_PUBLIC_DOMAIN}}"
+      },
+      "public": true
+    },
+    {
+      "name": "pwa",
+      "description": "Progressive Web App for mobile experience.",
+      "source": {
+        "rootDir": "pwa",
+        "buildCommand": "npm install && npm run build:pwa",
+        "startCommand": "nginx -g 'daemon off;'"
+      },
+      "type": "docker",
+      "dockerfile": "pwa/Dockerfile",
+      "environment": {
+        "PORT": "80",
+        "API_BASE_URL": "https://${{backend-api.RAILWAY_PUBLIC_DOMAIN}}"
+      },
+      "public": true
+    },
+    {
+      "name": "PostgreSQL",
+      "description": "Managed PostgreSQL database service.",
+      "type": "service",
+      "service": "postgresql",
+      "environment": {
+        "POSTGRES_USER": "neobank_user",
+        "POSTGRES_PASSWORD": "${{POSTGRES_PASSWORD}}",
+        "POSTGRES_DB": "neobank_db"
+      }
+    },
+    {
+      "name": "Redis",
+      "description": "Managed Redis for caching and session management.",
+      "type": "service",
+      "service": "redis"
+    }
+  ],
+  "plugins": [
+    {
+      "name": "Auto-Deploy from Git",
+      "description": "Enables automatic deployment on every push to the main branch.",
+      "type": "plugin",
+      "plugin": "github-autodeploy",
+      "config": {
+        "branch": "main"
+      }
+    }
+  ]
+}

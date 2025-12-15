@@ -1,0 +1,129 @@
+# Prometheus Alerting Rules for Rate Limiter
+# Save as rate_limiter_alerts.yml
+
+groups:
+  - name: rate_limiter_alerts
+    interval: 30s
+    rules:
+      # Alert: High rate of 429 errors
+      - alert: HighRateLimitBlocks
+        expr: |
+          rate(rate_limit_blocks_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: rate-limiter
+        annotations:
+          summary: "High rate of 429 errors on {{ $labels.endpoint }}"
+          description: "Endpoint {{ $labels.endpoint }} is experiencing {{ $value }} rate limit blocks per second over the last 5 minutes. This may indicate an attack or misconfiguration."
+          runbook_url: "https://docs.neobank.com/runbooks/rate-limiter/high-blocks"
+      
+      # Alert: Spike in lockouts
+      - alert: RateLimiterLockoutSpike
+        expr: |
+          rate(rate_limit_lockouts_total[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+          component: rate-limiter
+        annotations:
+          summary: "Spike in rate limiter lockouts on {{ $labels.endpoint }}"
+          description: "{{ $value }} lockouts per second on {{ $labels.endpoint }} over the last 5 minutes. Possible brute force attack."
+          runbook_url: "https://docs.neobank.com/runbooks/rate-limiter/lockout-spike"
+      
+      # Alert: Many active lockouts
+      - alert: HighActiveLockouts
+        expr: |
+          rate_limit_active_lockouts > 100
+        for: 10m
+        labels:
+          severity: critical
+          component: rate-limiter
+        annotations:
+          summary: "High number of active lockouts: {{ $value }}"
+          description: "There are currently {{ $value }} active lockouts on {{ $labels.endpoint }}. This may indicate a large-scale attack."
+          runbook_url: "https://docs.neobank.com/runbooks/rate-limiter/high-lockouts"
+      
+      # Alert: Rate limiter check latency
+      - alert: RateLimiterHighLatency
+        expr: |
+          histogram_quantile(0.95, rate(rate_limit_check_duration_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: rate-limiter
+        annotations:
+          summary: "High rate limiter check latency on {{ $labels.endpoint }}"
+          description: "95th percentile latency is {{ $value }}s on {{ $labels.endpoint }}. Expected < 0.1s."
+          runbook_url: "https://docs.neobank.com/runbooks/rate-limiter/high-latency"
+      
+      # Alert: Rate limiter check failures
+      - alert: RateLimiterCheckFailures
+        expr: |
+          rate(rate_limit_checks_total{result="error"}[5m]) > 1
+        for: 2m
+        labels:
+          severity: critical
+          component: rate-limiter
+        annotations:
+          summary: "Rate limiter check failures on {{ $labels.endpoint }}"
+          description: "Rate limiter is experiencing errors: {{ $value }} errors per second. Check Redis connectivity."
+          runbook_url: "https://docs.neobank.com/runbooks/rate-limiter/check-failures"
+      
+      # Alert: Unusual lockout duration
+      - alert: LongLockoutDuration
+        expr: |
+          rate_limit_time_until_reset_seconds > 3600
+        for: 5m
+        labels:
+          severity: info
+          component: rate-limiter
+        annotations:
+          summary: "Long lockout duration detected"
+          description: "Lockout duration is {{ $value }}s ({{ $value | humanizeDuration }}). Review rate limiter configuration."
+          runbook_url: "https://docs.neobank.com/runbooks/rate-limiter/long-lockout"
+      
+      # Alert: Rate limiter disabled
+      - alert: RateLimiterDisabled
+        expr: |
+          absent(rate_limit_checks_total)
+        for: 5m
+        labels:
+          severity: critical
+          component: rate-limiter
+        annotations:
+          summary: "Rate limiter metrics not found"
+          description: "Rate limiter metrics are not being reported. Service may be down or metrics endpoint unreachable."
+          runbook_url: "https://docs.neobank.com/runbooks/rate-limiter/disabled"
+      
+      # Alert: Coordinated attack pattern
+      - alert: CoordinatedAttackDetected
+        expr: |
+          (
+            rate(rate_limit_blocks_total{reason="limit_exceeded"}[1m]) > 20
+            and
+            count(rate_limit_active_lockouts > 0) > 10
+          )
+        for: 1m
+        labels:
+          severity: critical
+          component: rate-limiter
+          alert_type: security
+        annotations:
+          summary: "Possible coordinated attack detected"
+          description: "High rate of blocks ({{ $value }}/s) across multiple endpoints with many active lockouts. Possible DDoS or brute force attack."
+          runbook_url: "https://docs.neobank.com/runbooks/security/coordinated-attack"
+      
+      # Alert: Login endpoint under attack
+      - alert: LoginEndpointUnderAttack
+        expr: |
+          rate(rate_limit_blocks_total{endpoint="/api/v1/auth/login"}[5m]) > 50
+        for: 2m
+        labels:
+          severity: critical
+          component: rate-limiter
+          alert_type: security
+        annotations:
+          summary: "Login endpoint under attack"
+          description: "Login endpoint experiencing {{ $value }} blocks per second. Immediate action required."
+          runbook_url: "https://docs.neobank.com/runbooks/security/login-attack"

@@ -1,0 +1,598 @@
+---
+# APISIX High Availability API Gateway Configuration
+# Production-ready APISIX gateway with clustering and etcd backend
+# Version: 1.0.0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apisix
+  labels:
+    name: apisix
+    environment: production
+
+---
+# APISIX ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-config
+  namespace: apisix
+data:
+  config.yaml: |
+    apisix:
+      node_listen:
+        - port: 9080
+          enable_http2: false
+        - port: 9443
+          enable_http2: true
+      enable_admin: true
+      enable_admin_cors: true
+      enable_debug: false
+      enable_dev_mode: false
+      enable_reuseport: true
+      enable_ipv6: false
+      enable_http2: true
+      enable_server_tokens: false
+      
+      extra_lua_path: "/opt/apisix/?.lua"
+      extra_lua_cpath: "/opt/apisix/?.so"
+      
+      proxy_cache:
+        cache_ttl: 10s
+        zones:
+          - name: disk_cache_one
+            memory_size: 50m
+            disk_size: 1G
+            disk_path: /tmp/disk_cache_one
+            cache_levels: 1:2
+      
+      router:
+        http: radixtree_uri
+        ssl: radixtree_sni
+      
+      resolver_timeout: 5
+      enable_resolv_search_opt: true
+      
+      ssl:
+        enable: true
+        listen:
+          - port: 9443
+            enable_http2: true
+        ssl_protocols: TLSv1.2 TLSv1.3
+        ssl_ciphers: ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+        ssl_session_tickets: false
+      
+      real_ip_header: X-Forwarded-For
+      real_ip_recursive: "on"
+      real_ip_from:
+        - 127.0.0.1
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    
+    nginx_config:
+      error_log: /dev/stderr
+      error_log_level: warn
+      worker_processes: auto
+      enable_cpu_affinity: true
+      worker_rlimit_nofile: 20480
+      event:
+        worker_connections: 10620
+      http:
+        enable_access_log: true
+        access_log: /dev/stdout
+        access_log_format: '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" $request_time $upstream_response_time'
+        access_log_format_escape: default
+        keepalive_timeout: 60s
+        client_header_timeout: 60s
+        client_body_timeout: 60s
+        send_timeout: 10s
+        underscores_in_headers: "on"
+        real_ip_header: X-Forwarded-For
+        real_ip_recursive: "on"
+        real_ip_from:
+          - 127.0.0.1
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+        custom_lua_shared_dict:
+          prometheus-metrics: 15m
+    
+    etcd:
+      host:
+        - "http://etcd-0.etcd-headless.apisix.svc.cluster.local:2379"
+        - "http://etcd-1.etcd-headless.apisix.svc.cluster.local:2379"
+        - "http://etcd-2.etcd-headless.apisix.svc.cluster.local:2379"
+      prefix: /apisix
+      timeout: 30
+      resync_delay: 5
+      health_check_timeout: 10
+      startup_retry: 2
+    
+    discovery:
+      dns:
+        servers:
+          - "kube-dns.kube-system.svc.cluster.local:53"
+    
+    plugins:
+      - api-breaker
+      - authz-keycloak
+      - basic-auth
+      - batch-requests
+      - consumer-restriction
+      - cors
+      - echo
+      - fault-injection
+      - grpc-transcode
+      - hmac-auth
+      - http-logger
+      - ip-restriction
+      - jwt-auth
+      - kafka-logger
+      - key-auth
+      - limit-conn
+      - limit-count
+      - limit-req
+      - node-status
+      - openid-connect
+      - prometheus
+      - proxy-cache
+      - proxy-mirror
+      - proxy-rewrite
+      - redirect
+      - referer-restriction
+      - request-id
+      - request-validation
+      - response-rewrite
+      - serverless-post-function
+      - serverless-pre-function
+      - sls-logger
+      - syslog
+      - tcp-logger
+      - traffic-split
+      - ua-restriction
+      - uri-blocker
+      - wolf-rbac
+      - zipkin
+      - opentelemetry
+    
+    plugin_attr:
+      prometheus:
+        export_uri: /apisix/prometheus/metrics
+        metric_prefix: apisix_
+        enable_export_server: true
+        export_addr:
+          ip: 0.0.0.0
+          port: 9091
+      opentelemetry:
+        trace_id_source: x-request-id
+        resource:
+          service.name: APISIX
+        collector:
+          address: otel-collector.monitoring:4317
+          request_timeout: 3
+        batch_span_processor:
+          drop_on_queue_full: false
+          max_queue_size: 1024
+          batch_timeout: 2
+          inactive_timeout: 1
+          max_export_batch_size: 16
+    
+    deployment:
+      role: traditional
+      role_traditional:
+        config_provider: etcd
+      admin:
+        admin_key:
+          - name: admin
+            key: CHANGE_ME_APISIX_ADMIN_KEY
+            role: admin
+          - name: viewer
+            key: CHANGE_ME_APISIX_VIEWER_KEY
+            role: viewer
+        allow_admin:
+          - 0.0.0.0/0
+
+---
+# APISIX Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: apisix-secrets
+  namespace: apisix
+type: Opaque
+stringData:
+  admin-key: CHANGE_ME_APISIX_ADMIN_KEY
+  viewer-key: CHANGE_ME_APISIX_VIEWER_KEY
+
+---
+# etcd StatefulSet for APISIX
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  namespace: apisix
+  labels:
+    app: etcd
+spec:
+  serviceName: etcd-headless
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - etcd
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.10
+          ports:
+            - containerPort: 2379
+              name: client
+            - containerPort: 2380
+              name: peer
+          env:
+            - name: ETCD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ETCD_DATA_DIR
+              value: /var/lib/etcd
+            - name: ETCD_INITIAL_ADVERTISE_PEER_URLS
+              value: http://$(ETCD_NAME).etcd-headless.apisix.svc.cluster.local:2380
+            - name: ETCD_LISTEN_PEER_URLS
+              value: http://0.0.0.0:2380
+            - name: ETCD_LISTEN_CLIENT_URLS
+              value: http://0.0.0.0:2379
+            - name: ETCD_ADVERTISE_CLIENT_URLS
+              value: http://$(ETCD_NAME).etcd-headless.apisix.svc.cluster.local:2379
+            - name: ETCD_INITIAL_CLUSTER
+              value: etcd-0=http://etcd-0.etcd-headless.apisix.svc.cluster.local:2380,etcd-1=http://etcd-1.etcd-headless.apisix.svc.cluster.local:2380,etcd-2=http://etcd-2.etcd-headless.apisix.svc.cluster.local:2380
+            - name: ETCD_INITIAL_CLUSTER_STATE
+              value: new
+            - name: ETCD_INITIAL_CLUSTER_TOKEN
+              value: apisix-etcd-cluster
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 2379
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 2379
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/etcd
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 10Gi
+
+---
+# APISIX Deployment (HA)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix
+  namespace: apisix
+  labels:
+    app: apisix
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: apisix
+  template:
+    metadata:
+      labels:
+        app: apisix
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/apisix/prometheus/metrics"
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - apisix
+              topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - apisix
+                topologyKey: topology.kubernetes.io/zone
+      containers:
+        - name: apisix
+          image: apache/apisix:3.7.0-debian
+          ports:
+            - containerPort: 9080
+              name: http
+            - containerPort: 9443
+              name: https
+            - containerPort: 9091
+              name: metrics
+            - containerPort: 9180
+              name: admin
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /apisix/status
+              port: 9080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /apisix/status
+              port: 9080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/apisix/conf/config.yaml
+              subPath: config.yaml
+      volumes:
+        - name: config
+          configMap:
+            name: apisix-config
+
+---
+# etcd Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: apisix
+spec:
+  selector:
+    app: etcd
+  ports:
+    - port: 2379
+      targetPort: 2379
+      name: client
+  type: ClusterIP
+
+---
+# etcd Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-headless
+  namespace: apisix
+spec:
+  clusterIP: None
+  selector:
+    app: etcd
+  ports:
+    - port: 2379
+      targetPort: 2379
+      name: client
+    - port: 2380
+      targetPort: 2380
+      name: peer
+
+---
+# APISIX Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix
+  namespace: apisix
+  labels:
+    app: apisix
+spec:
+  selector:
+    app: apisix
+  ports:
+    - port: 80
+      targetPort: 9080
+      name: http
+    - port: 443
+      targetPort: 9443
+      name: https
+    - port: 9180
+      targetPort: 9180
+      name: admin
+  type: LoadBalancer
+
+---
+# APISIX Admin Service (internal only)
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-admin
+  namespace: apisix
+  labels:
+    app: apisix
+spec:
+  selector:
+    app: apisix
+  ports:
+    - port: 9180
+      targetPort: 9180
+      name: admin
+  type: ClusterIP
+
+---
+# PodDisruptionBudget for APISIX
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: apisix-pdb
+  namespace: apisix
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: apisix
+
+---
+# PodDisruptionBudget for etcd
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: etcd-pdb
+  namespace: apisix
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: etcd
+
+---
+# HorizontalPodAutoscaler for APISIX
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: apisix-hpa
+  namespace: apisix
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: apisix
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 3
+          periodSeconds: 60
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: apisix-monitor
+  namespace: apisix
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: apisix
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /apisix/prometheus/metrics
+
+---
+# NetworkPolicy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: apisix-network-policy
+  namespace: apisix
+spec:
+  podSelector:
+    matchLabels:
+      app: apisix
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9080
+        - protocol: TCP
+          port: 9443
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: apisix
+      ports:
+        - protocol: TCP
+          port: 9180
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: etcd
+      ports:
+        - protocol: TCP
+          port: 2379
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
