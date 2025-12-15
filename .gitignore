@@ -1,0 +1,162 @@
+# Dependencies
+node_modules/
+vendor/
+.pnpm-store/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.local
+.env.*.local
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build outputs
+dist/
+build/
+out/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+*.cover
+*.coverage
+
+# Vite
+.vite/
+
+# React Native
+*.jsbundle
+*.hbc
+
+# Mobile builds
+android/app/build/
+ios/build/
+ios/Pods/
+*.ipa
+*.apk
+*.aab
+
+# Secrets (never commit these)
+*.pem
+*.key
+*.crt
+secrets/
+credentials.json
+service-account.json
+
+# Archives
+*.tar.gz
+*.zip
+*.rar
+
+# Recordings and screenshots
+*.mp4
+*.webm
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Docker
+.docker/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Kubernetes secrets
+*-secret.yaml
+*-secrets.yaml
+
+# Local development
+.local/
+local_settings.py
+
+# Jupyter
+.ipynb_checkpoints/
+
+# MyPy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Full outputs (Devin)
+full_outputs/
