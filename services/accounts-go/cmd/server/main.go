@@ -18,6 +18,18 @@ import (
 
 func main() {
 	cfg := config.Load()
+	
+	// Database initialization - require DATABASE_URL in production
+	databaseURL := os.Getenv("DATABASE_URL")
+	environment := os.Getenv("ENVIRONMENT")
+	
+	if databaseURL == "" && environment == "production" {
+		log.Fatal("DATABASE_URL is required in production environment")
+	}
+	if databaseURL == "" {
+		log.Println("WARNING: Using in-memory database (not for production use)")
+	}
+	
 	db := database.NewInMemoryDB()
 	accountsHandler := handlers.NewAccountsHandler(db, cfg)
 

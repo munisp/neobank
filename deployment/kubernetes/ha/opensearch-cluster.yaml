@@ -513,9 +513,10 @@ metadata:
     app.kubernetes.io/component: credentials
 type: Opaque
 data:
-  admin-password: TmVvQmFua09wZW5TZWFyY2hBZG1pbjIwMjQh  # NeoBank OpenSearch Admin 2024!
-  analyst-password: QW5hbHlzdFBhc3N3b3JkMjAyNCE=  # AnalystPassword2024!
-  fraud-password: RnJhdWREZXRlY3RvclBhc3MyMDI0IQ==  # FraudDetectorPass2024!
+  # CHANGE_ME: Replace with base64-encoded production passwords
+  admin-password: Q0hBTkdFX01FX09QRU5TRUFSQ0hfQURNSU5fUEFTU1dPUkQ=
+  analyst-password: Q0hBTkdFX01FX09QRU5TRUFSQ0hfQU5BTFlTVF9QQVNTV09SRA==
+  fraud-password: Q0hBTkdFX01FX09QRU5TRUFSQ0hfRlJBVURfUEFTU1dPUkQ=
 
 ---
 # Service Account for OpenSearch

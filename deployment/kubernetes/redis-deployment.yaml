@@ -7,10 +7,9 @@ metadata:
     app.kubernetes.io/instance: redis-prod
 type: Opaque
 data:
-  # The password 'redis-password-123' encoded in base64
-  # In a real production environment, this should be generated securely.
-  # echo -n 'redis-password-123' | base64
-  redis-password: cmVkaXMtcGFzc3dvcmQtMTIz
+  # CHANGE_ME: Replace with base64-encoded production password
+  # echo -n 'YOUR_SECURE_PASSWORD' | base64
+  redis-password: Q0hBTkdFX01FX1JFRElTX1BBU1NXT1JE
 
 ---
 apiVersion: v1

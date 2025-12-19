@@ -48,6 +48,7 @@ type ComplianceCheck struct {
 	Status        ComplianceStatus    `json:"status"`
 	RiskLevel     RiskLevel           `json:"risk_level"`
 	RiskScore     decimal.Decimal     `json:"risk_score"`
+	Notes         string              `json:"notes,omitempty"`
 	Findings      []ComplianceFinding `json:"findings,omitempty"`
 	DataSources   []string            `json:"data_sources"`
 	ReviewedBy    *uuid.UUID          `json:"reviewed_by,omitempty"`

@@ -80,21 +80,21 @@ type Address struct {
 
 // CardTransaction represents a card transaction
 type CardTransaction struct {
-	ID              uuid.UUID       `json:"id"`
-	CardID          uuid.UUID       `json:"card_id"`
-	Type            string          `json:"type"` // purchase, withdrawal, refund, transfer
-	Amount          decimal.Decimal `json:"amount"`
-	Currency        string          `json:"currency"`
-	MerchantName    string          `json:"merchant_name,omitempty"`
-	MerchantCategory string         `json:"merchant_category,omitempty"`
-	Description     string          `json:"description"`
-	Status          string          `json:"status"` // pending, completed, declined, reversed
-	DeclineReason   string          `json:"decline_reason,omitempty"`
-	Reference       string          `json:"reference"`
-	AuthCode        string          `json:"auth_code,omitempty"`
-	Location        string          `json:"location,omitempty"`
-	IsOnline        bool            `json:"is_online"`
-	CreatedAt       time.Time       `json:"created_at"`
+	ID               uuid.UUID       `json:"id"`
+	CardID           uuid.UUID       `json:"card_id"`
+	TransactionType  string          `json:"transaction_type"` // purchase, withdrawal, refund, transfer
+	Amount           decimal.Decimal `json:"amount"`
+	Currency         string          `json:"currency"`
+	MerchantName     string          `json:"merchant_name,omitempty"`
+	MerchantCategory string          `json:"merchant_category,omitempty"`
+	Description      string          `json:"description"`
+	Status           string          `json:"status"` // pending, completed, declined, reversed
+	DeclineReason    string          `json:"decline_reason,omitempty"`
+	Reference        string          `json:"reference"`
+	AuthCode         string          `json:"auth_code,omitempty"`
+	Location         string          `json:"location,omitempty"`
+	IsOnline         bool            `json:"is_online"`
+	CreatedAt        time.Time       `json:"created_at"`
 }
 
 // CreateCardRequest represents a card creation request

@@ -102,7 +102,7 @@ check_database() {
     # Note: psql requires the PGPASSWORD environment variable to be set for non-interactive login.
     # For a production script, consider using a .pgpass file or a secure secret manager.
     # For this example, we'll use a simple connection check.
-    if PGPASSWORD="your_db_password" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -c "SELECT 1;" > /dev/null 2>&1; then
+    if PGPASSWORD="${PGPASSWORD:-CHANGE_ME_DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -c "SELECT 1;" > /dev/null 2>&1; then
         success "Database check passed."
     else
         error "Database check failed. Check credentials, host (${DB_HOST}:${DB_PORT}), and user (${DB_USER})."

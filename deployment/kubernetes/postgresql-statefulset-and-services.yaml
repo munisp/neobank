@@ -13,10 +13,10 @@ type: Opaque
 data:
   # Base64 encoded: 'postgres'
   POSTGRES_USER: cG9zdGdyZXM=
-  # Base64 encoded: 'examplepassword' - **MUST BE CHANGED IN PRODUCTION**
-  POSTGRES_PASSWORD: ZXhhbXBsZXBhc3N3b3Jk
-  # Base64 encoded: 'mydatabase'
-  POSTGRES_DB: bXlkYXRhYmFzZQ==
+  # CHANGE_ME: Replace with base64-encoded production password
+  POSTGRES_PASSWORD: Q0hBTkdFX01FX1BPU1RHUkVTX1BBU1NXT1JE
+  # Base64 encoded: 'neobank'
+  POSTGRES_DB: bmVvYmFuaw==
 ---
 apiVersion: v1
 kind: Service

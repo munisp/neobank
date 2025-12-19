@@ -329,8 +329,8 @@ metadata:
     app.kubernetes.io/instance: grafana-server
 type: Opaque
 data:
-  # Base64 encoded 'prom-admin-password'. In a real environment, this should be generated securely.
-  admin-password: cHJvbS1hZG1pbi1wYXNzd29yZA==
+  # CHANGE_ME: Replace with base64-encoded production password
+  admin-password: Q0hBTkdFX01FX0dSQUZBTkFfQURNSU5fUEFTU1dPUkQ=
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

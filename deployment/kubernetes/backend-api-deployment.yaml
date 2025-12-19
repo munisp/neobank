@@ -21,10 +21,10 @@ metadata:
     environment: production
 type: Opaque
 data:
-  # Sensitive data should be base64 encoded.
-  # Example: DATABASE_PASSWORD: "supersecretpassword" -> c3VwZXJzZWNyZXRwYXNzd29yZA==
-  DATABASE_PASSWORD: "c3VwZXJzZWNyZXRwYXNzd29yZA=="
-  API_KEY: "YWJjZGVmMTIzNDU2" # Example: "abcdef123456"
+  # CHANGE_ME: Replace with base64-encoded production credentials
+  # echo -n 'YOUR_SECURE_PASSWORD' | base64
+  DATABASE_PASSWORD: "Q0hBTkdFX01FX0RBVEFCQVNFX1BBU1NXT1JE"
+  API_KEY: "Q0hBTkdFX01FX0FQSV9LRVk="
 ---
 apiVersion: apps/v1
 kind: Deployment
