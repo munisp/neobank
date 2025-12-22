@@ -333,6 +333,11 @@ def create_application() -> FastAPI:
     app.include_router(ussd_router.router, prefix="/api/v1/ussd", tags=["USSD"])
     app.include_router(ussd_router.router, prefix="/api/ussd", tags=["USSD"])
     
+    # Mojaloop Interoperability (DFSP Adapter)
+    from app.routers import mojaloop_router
+    app.include_router(mojaloop_router.router, prefix="/api/v1", tags=["Mojaloop"])
+    app.include_router(mojaloop_router.router, prefix="/api", tags=["Mojaloop"])
+    
     return app
 
 

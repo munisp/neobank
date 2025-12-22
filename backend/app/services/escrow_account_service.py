@@ -1,74 +1,122 @@
 """
-Escrow Account Integration Service
+Escrow Account Integration Service - Enhanced Version
 
 This service integrates escrow transactions with the core banking system,
-handling fund movements between buyer accounts, escrow holding accounts,
-and seller accounts with proper TigerBeetle ledger entries.
+using the enhanced TigerBeetle client with:
+- Proper u128 ID mapping (no string IDs)
+- Two-phase pending transfers for escrow holds
+- Linked transfers for atomic multi-leg transactions
+- No virtual fallbacks (fail-fast in production)
 """
 import uuid
+import os
 from decimal import Decimal
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
 import structlog
-import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, and_
 
+from app.infrastructure.tigerbeetle_client import (
+    tigerbeetle_client,
+    Ledger,
+    AccountCode,
+    TransferCode,
+    string_to_u128,
+    u128_to_hex
+)
 from config.settings import settings
 
 logger = structlog.get_logger()
 
+# Environment check - no virtual fallbacks in production
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+ESCROW_REQUIRE_TIGERBEETLE = ENVIRONMENT == "production"
+
 
 class EscrowAccountType(str, Enum):
     """Types of escrow accounts"""
-    HOLDING = "escrow_holding"  # Main escrow holding account
-    FEE = "escrow_fee"  # Platform fee collection account
-    INSURANCE = "escrow_insurance"  # Insurance premium collection
-    DISPUTE = "escrow_dispute"  # Disputed funds holding
+    HOLDING = "escrow_holding"
+    FEE = "escrow_fee"
+    INSURANCE = "escrow_insurance"
+    DISPUTE = "escrow_dispute"
 
 
 class EscrowTransactionType(str, Enum):
     """Types of escrow transactions"""
-    FUND = "fund"  # Buyer funds escrow
-    RELEASE = "release"  # Release to seller
-    REFUND = "refund"  # Refund to buyer
-    FEE_COLLECTION = "fee_collection"  # Platform fee
-    INSURANCE_PREMIUM = "insurance_premium"  # Insurance premium
-    PARTIAL_RELEASE = "partial_release"  # Milestone payment
-    DISPUTE_HOLD = "dispute_hold"  # Move to dispute holding
-    DISPUTE_RESOLVE = "dispute_resolve"  # Resolve dispute
-
-
-class TigerBeetleLedger(int, Enum):
-    """TigerBeetle ledger IDs for different account types"""
-    CUSTOMER_ACCOUNTS = 1  # Regular customer accounts
-    ESCROW_HOLDING = 10  # Escrow holding accounts
-    ESCROW_FEES = 11  # Platform fee accounts
-    ESCROW_INSURANCE = 12  # Insurance accounts
-    ESCROW_DISPUTES = 13  # Dispute holding accounts
+    FUND = "fund"
+    RELEASE = "release"
+    REFUND = "refund"
+    FEE_COLLECTION = "fee_collection"
+    INSURANCE_PREMIUM = "insurance_premium"
+    PARTIAL_RELEASE = "partial_release"
+    DISPUTE_HOLD = "dispute_hold"
+    DISPUTE_RESOLVE = "dispute_resolve"
 
 
 class EscrowAccountService:
     """
-    Service for managing escrow account operations with TigerBeetle integration.
+    Enhanced escrow service using TigerBeetle native client.
     
-    This service handles:
-    - Creating escrow holding accounts
-    - Funding escrow from buyer's account
-    - Releasing funds to seller's account
-    - Processing refunds
-    - Collecting platform fees
-    - Managing milestone payments
-    - Handling dispute fund movements
+    Features:
+    - Proper u128 ID mapping for all accounts/transfers
+    - Two-phase pending transfers for escrow holds
+    - Linked transfers for atomic multi-leg transactions
+    - Fail-fast in production (no virtual fallbacks)
     """
     
     def __init__(self):
-        self.tigerbeetle_url = getattr(settings, 'TIGERBEETLE_URL', 'http://localhost:3000')
-        self.timeout = 10.0
-        self.platform_fee_account_id = "ESCROW_PLATFORM_FEE_001"
-        self.insurance_account_id = "ESCROW_INSURANCE_001"
+        self.tb = tigerbeetle_client
+        # Platform accounts use deterministic IDs
+        self.platform_fee_account_id = string_to_u128("escrow:platform_fee:001")
+        self.insurance_account_id = string_to_u128("escrow:insurance:001")
+        self.dispute_account_id = string_to_u128("escrow:dispute:001")
+        self._ensure_platform_accounts()
+    
+    def _ensure_platform_accounts(self):
+        """Ensure platform escrow accounts exist in TigerBeetle."""
+        if not self.tb.is_available:
+            if ESCROW_REQUIRE_TIGERBEETLE:
+                raise RuntimeError("TigerBeetle required for escrow in production")
+            logger.warning("TigerBeetle unavailable - escrow operations will fail")
+            return
+        
+        # Create platform fee account
+        self.tb.create_account_with_constraints(
+            account_id=self.platform_fee_account_id,
+            ledger=Ledger.ESCROW_FEES,
+            code=AccountCode.ESCROW_FEE,
+            prevent_overdraft=True
+        )
+        
+        # Create insurance account
+        self.tb.create_account_with_constraints(
+            account_id=self.insurance_account_id,
+            ledger=Ledger.ESCROW_INSURANCE,
+            code=AccountCode.ESCROW_INSURANCE,
+            prevent_overdraft=True
+        )
+        
+        # Create dispute holding account
+        self.tb.create_account_with_constraints(
+            account_id=self.dispute_account_id,
+            ledger=Ledger.ESCROW_DISPUTES,
+            code=AccountCode.ESCROW_DISPUTE,
+            prevent_overdraft=True
+        )
+        
+        logger.info("Platform escrow accounts initialized")
+    
+    def _escrow_account_id(self, escrow_id: str) -> int:
+        """Generate deterministic u128 ID for escrow account."""
+        return string_to_u128(f"escrow:holding:{escrow_id}")
+    
+    def _transfer_id(self, escrow_id: str, tx_type: str, suffix: str = "") -> int:
+        """Generate deterministic u128 ID for transfer."""
+        key = f"escrow:transfer:{escrow_id}:{tx_type}:{suffix}"
+        return string_to_u128(key)
     
     async def create_escrow_holding_account(
         self,
@@ -81,63 +129,56 @@ class EscrowAccountService:
         """
         Create a dedicated escrow holding account for a transaction.
         
-        This creates a virtual account in TigerBeetle that holds funds
-        until the escrow conditions are met.
+        Uses proper u128 ID mapping and TigerBeetle native client.
         """
-        account_id = f"ESCROW_{escrow_id}"
+        account_id = self._escrow_account_id(escrow_id)
         
-        tigerbeetle_account = {
-            "id": account_id,
-            "ledger": TigerBeetleLedger.ESCROW_HOLDING.value,
-            "code": 1,  # Escrow holding account code
-            "flags": 0,
-            "user_data_128": escrow_id,
-            "user_data_64": 0,
-            "user_data_32": 0,
-            "reserved": 0,
-            "debits_pending": 0,
-            "debits_posted": 0,
-            "credits_pending": 0,
-            "credits_posted": 0,
-            "timestamp": 0
-        }
-        
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.tigerbeetle_url}/accounts",
-                    json=tigerbeetle_account
-                )
-                response.raise_for_status()
-                
-                logger.info(
-                    "Escrow holding account created",
-                    escrow_id=escrow_id,
-                    account_id=account_id,
-                    amount=str(amount),
-                    currency=currency
-                )
-                
-                return {
-                    "account_id": account_id,
-                    "escrow_id": escrow_id,
-                    "ledger": TigerBeetleLedger.ESCROW_HOLDING.value,
-                    "status": "created",
-                    "currency": currency
-                }
-                
-        except httpx.RequestError as e:
-            logger.warning(
-                "TigerBeetle unavailable, using virtual escrow account",
-                escrow_id=escrow_id,
-                error=str(e)
-            )
-            # Return virtual account for development/testing
+        if not self.tb.is_available:
+            if ESCROW_REQUIRE_TIGERBEETLE:
+                raise RuntimeError("TigerBeetle required for escrow in production")
+            logger.warning("TigerBeetle unavailable - returning error")
             return {
-                "account_id": account_id,
+                "account_id": u128_to_hex(account_id),
                 "escrow_id": escrow_id,
-                "ledger": TigerBeetleLedger.ESCROW_HOLDING.value,
-                "status": "virtual",
+                "ledger": Ledger.ESCROW_HOLDING,
+                "status": "error",
+                "error": "TigerBeetle unavailable",
+                "currency": currency
+            }
+        
+        # Create escrow holding account with overdraft prevention
+        success = self.tb.create_account_with_constraints(
+            account_id=account_id,
+            ledger=Ledger.ESCROW_HOLDING,
+            code=AccountCode.ESCROW_HOLDING,
+            prevent_overdraft=True,
+            user_data=string_to_u128(f"buyer:{buyer_id}:seller:{seller_id}")
+        )
+        
+        if success:
+            logger.info(
+                "Escrow holding account created",
+                escrow_id=escrow_id,
+                account_id=u128_to_hex(account_id),
+                amount=str(amount),
+                currency=currency
+            )
+            
+            return {
+                "account_id": u128_to_hex(account_id),
+                "account_id_int": account_id,
+                "escrow_id": escrow_id,
+                "ledger": Ledger.ESCROW_HOLDING,
+                "status": "created",
+                "currency": currency
+            }
+        else:
+            return {
+                "account_id": u128_to_hex(account_id),
+                "escrow_id": escrow_id,
+                "ledger": Ledger.ESCROW_HOLDING,
+                "status": "error",
+                "error": "Failed to create account",
                 "currency": currency
             }
     
