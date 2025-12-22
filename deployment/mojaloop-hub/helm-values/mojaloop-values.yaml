@@ -1,0 +1,558 @@
+# Mojaloop Hub Helm Values - PostgreSQL Configuration
+# This configuration uses PostgreSQL instead of MySQL for all Mojaloop services
+# while maintaining compatibility with future Mojaloop updates
+
+global:
+  config:
+    forensicloggingsidecar_disabled: true
+  
+  kafka:
+    host: mojaloop-kafka
+    port: 9092
+
+# Central Ledger - Main transfer state machine
+central-ledger:
+  enabled: true
+  
+  centralledger-service:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_ledger
+        acquireTimeoutMillis: 30000
+        createTimeoutMillis: 30000
+        destroyTimeoutMillis: 5000
+        idleTimeoutMillis: 30000
+        reapIntervalMillis: 1000
+        createRetryIntervalMillis: 200
+        pool:
+          min: 10
+          max: 30
+      
+      kafka:
+        producer:
+          broker:
+            list: mojaloop-kafka:9092
+        consumer:
+          broker:
+            list: mojaloop-kafka:9092
+    
+    env:
+      CLEDG_DATABASE__DIALECT: postgres
+      CLEDG_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+      CLEDG_DATABASE__PORT: "5432"
+      CLEDG_DATABASE__USER: mojaloop
+      CLEDG_DATABASE__DATABASE: central_ledger
+    
+    secrets:
+      CLEDG_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "1"
+    
+    replicaCount: 2
+    
+    readinessProbe:
+      enabled: true
+      httpGet:
+        path: /health
+        port: 3001
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    
+    livenessProbe:
+      enabled: true
+      httpGet:
+        path: /health
+        port: 3001
+      initialDelaySeconds: 60
+      periodSeconds: 30
+  
+  centralledger-handler-transfer-prepare:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_ledger
+    
+    env:
+      CLEDG_DATABASE__DIALECT: postgres
+      CLEDG_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CLEDG_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 2
+  
+  centralledger-handler-transfer-position:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_ledger
+    
+    env:
+      CLEDG_DATABASE__DIALECT: postgres
+      CLEDG_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CLEDG_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 2
+  
+  centralledger-handler-transfer-fulfil:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_ledger
+    
+    env:
+      CLEDG_DATABASE__DIALECT: postgres
+      CLEDG_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CLEDG_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 2
+  
+  centralledger-handler-timeout:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_ledger
+    
+    env:
+      CLEDG_DATABASE__DIALECT: postgres
+      CLEDG_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CLEDG_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 1
+  
+  centralledger-handler-admin-transfer:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_ledger
+    
+    env:
+      CLEDG_DATABASE__DIALECT: postgres
+      CLEDG_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CLEDG_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 1
+
+# Account Lookup Service - Party/DFSP registry
+account-lookup-service:
+  enabled: true
+  
+  account-lookup-service:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: account_lookup
+        pool:
+          min: 5
+          max: 20
+    
+    env:
+      ALS_DATABASE__DIALECT: postgres
+      ALS_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+      ALS_DATABASE__PORT: "5432"
+      ALS_DATABASE__USER: mojaloop
+      ALS_DATABASE__DATABASE: account_lookup
+    
+    secrets:
+      ALS_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    
+    replicaCount: 2
+  
+  account-lookup-service-admin:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: account_lookup
+    
+    env:
+      ALS_DATABASE__DIALECT: postgres
+      ALS_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      ALS_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 1
+
+# Quoting Service - Quote calculation and management
+quoting-service:
+  enabled: true
+  
+  config:
+    db:
+      type: postgres
+      driver: pg
+      host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+      port: 5432
+      user: mojaloop
+      database: quoting_service
+      pool:
+        min: 5
+        max: 20
+  
+  env:
+    QUOTE_DATABASE__DIALECT: postgres
+    QUOTE_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    QUOTE_DATABASE__PORT: "5432"
+    QUOTE_DATABASE__USER: mojaloop
+    QUOTE_DATABASE__DATABASE: quoting_service
+  
+  secrets:
+    QUOTE_DATABASE__PASSWORD:
+      secretName: mojaloop-postgres-credentials
+      secretKey: password
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  replicaCount: 2
+
+# ML API Adapter - FSPIOP API Gateway
+ml-api-adapter:
+  enabled: true
+  
+  ml-api-adapter-service:
+    config:
+      kafka:
+        producer:
+          broker:
+            list: mojaloop-kafka:9092
+        consumer:
+          broker:
+            list: mojaloop-kafka:9092
+    
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    
+    replicaCount: 2
+  
+  ml-api-adapter-handler-notification:
+    config:
+      kafka:
+        producer:
+          broker:
+            list: mojaloop-kafka:9092
+        consumer:
+          broker:
+            list: mojaloop-kafka:9092
+    
+    replicaCount: 2
+
+# Central Settlement - Settlement processing
+central-settlement:
+  enabled: true
+  
+  centralsettlement-service:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_settlement
+        pool:
+          min: 5
+          max: 20
+    
+    env:
+      CSL_DATABASE__DIALECT: postgres
+      CSL_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+      CSL_DATABASE__PORT: "5432"
+      CSL_DATABASE__USER: mojaloop
+      CSL_DATABASE__DATABASE: central_settlement
+    
+    secrets:
+      CSL_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    
+    replicaCount: 2
+  
+  centralsettlement-handler-deferredsettlement:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_settlement
+    
+    env:
+      CSL_DATABASE__DIALECT: postgres
+      CSL_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CSL_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 1
+  
+  centralsettlement-handler-grosssettlement:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_settlement
+    
+    env:
+      CSL_DATABASE__DIALECT: postgres
+      CSL_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CSL_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 1
+  
+  centralsettlement-handler-rules:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: central_settlement
+    
+    env:
+      CSL_DATABASE__DIALECT: postgres
+      CSL_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      CSL_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 1
+
+# Bulk API Adapter - Bulk transfer processing
+bulk-api-adapter:
+  enabled: true
+  
+  bulk-api-adapter-service:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: bulk_api_adapter
+    
+    env:
+      BULK_DATABASE__DIALECT: postgres
+      BULK_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      BULK_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 2
+  
+  bulk-api-adapter-handler-notification:
+    config:
+      db:
+        type: postgres
+        driver: pg
+        host: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+        port: 5432
+        user: mojaloop
+        database: bulk_api_adapter
+    
+    env:
+      BULK_DATABASE__DIALECT: postgres
+      BULK_DATABASE__HOST: mojaloop-postgres-pooler-rw.mojaloop.svc.cluster.local
+    
+    secrets:
+      BULK_DATABASE__PASSWORD:
+        secretName: mojaloop-postgres-credentials
+        secretKey: password
+    
+    replicaCount: 1
+
+# Transaction Requests Service
+transaction-requests-service:
+  enabled: true
+  
+  config:
+    kafka:
+      producer:
+        broker:
+          list: mojaloop-kafka:9092
+      consumer:
+        broker:
+          list: mojaloop-kafka:9092
+  
+  replicaCount: 2
+
+# Simulator for testing
+simulator:
+  enabled: false
+
+# Mojaloop Testing Toolkit
+mojaloop-testing-toolkit:
+  enabled: false
+
+# Thirdparty services (disabled by default)
+thirdparty:
+  enabled: false
+
+# MySQL disabled - using PostgreSQL
+mysql:
+  enabled: false
+
+# Kafka configuration
+kafka:
+  enabled: true
+  
+  replicaCount: 3
+  
+  persistence:
+    enabled: true
+    size: 20Gi
+  
+  zookeeper:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 10Gi
+  
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+
+# Redis for caching
+redis:
+  enabled: true
+  
+  architecture: replication
+  
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+  
+  replica:
+    replicaCount: 2
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+  
+  sentinel:
+    enabled: true
+    masterSet: mojaloop-master
+    quorum: 2

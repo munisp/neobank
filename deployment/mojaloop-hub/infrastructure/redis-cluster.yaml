@@ -1,0 +1,280 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: mojaloop
+data:
+  redis.conf: |
+    maxmemory 512mb
+    maxmemory-policy allkeys-lru
+    appendonly yes
+    appendfsync everysec
+    auto-aof-rewrite-percentage 100
+    auto-aof-rewrite-min-size 64mb
+    tcp-keepalive 300
+    timeout 0
+    tcp-backlog 511
+    databases 16
+    save 900 1
+    save 300 10
+    save 60 10000
+    stop-writes-on-bgsave-error yes
+    rdbcompression yes
+    rdbchecksum yes
+    dbfilename dump.rdb
+    replica-serve-stale-data yes
+    replica-read-only yes
+    repl-diskless-sync no
+    repl-diskless-sync-delay 5
+    repl-disable-tcp-nodelay no
+    replica-priority 100
+    lazyfree-lazy-eviction no
+    lazyfree-lazy-expire no
+    lazyfree-lazy-server-del no
+    replica-lazy-flush no
+    activerehashing yes
+    client-output-buffer-limit normal 0 0 0
+    client-output-buffer-limit replica 256mb 64mb 60
+    client-output-buffer-limit pubsub 32mb 8mb 60
+    hz 10
+    dynamic-hz yes
+    aof-rewrite-incremental-fsync yes
+    rdb-save-incremental-fsync yes
+  
+  sentinel.conf: |
+    sentinel monitor mojaloop-master mojaloop-redis-master 6379 2
+    sentinel down-after-milliseconds mojaloop-master 5000
+    sentinel failover-timeout mojaloop-master 60000
+    sentinel parallel-syncs mojaloop-master 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mojaloop-redis-master
+  namespace: mojaloop
+spec:
+  serviceName: mojaloop-redis-master
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mojaloop-redis
+      role: master
+  template:
+    metadata:
+      labels:
+        app: mojaloop-redis
+        role: master
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+          ports:
+            - containerPort: 6379
+              name: redis
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
+            - name: redis-data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-config
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mojaloop-redis-replica
+  namespace: mojaloop
+spec:
+  serviceName: mojaloop-redis-replica
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mojaloop-redis
+      role: replica
+  template:
+    metadata:
+      labels:
+        app: mojaloop-redis
+        role: replica
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          command:
+            - redis-server
+            - /etc/redis/redis.conf
+            - --replicaof
+            - mojaloop-redis-master
+            - "6379"
+          ports:
+            - containerPort: 6379
+              name: redis
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
+            - name: redis-data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-config
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mojaloop-redis-sentinel
+  namespace: mojaloop
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mojaloop-redis-sentinel
+  template:
+    metadata:
+      labels:
+        app: mojaloop-redis-sentinel
+    spec:
+      containers:
+        - name: sentinel
+          image: redis:7.2-alpine
+          command:
+            - redis-sentinel
+            - /etc/redis/sentinel.conf
+          ports:
+            - containerPort: 26379
+              name: sentinel
+          volumeMounts:
+            - name: redis-config
+              mountPath: /etc/redis
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+      volumes:
+        - name: redis-config
+          configMap:
+            name: redis-config
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - mojaloop-redis-sentinel
+                topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mojaloop-redis-master
+  namespace: mojaloop
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis
+  selector:
+    app: mojaloop-redis
+    role: master
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mojaloop-redis-replica
+  namespace: mojaloop
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis
+  selector:
+    app: mojaloop-redis
+    role: replica
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mojaloop-redis-sentinel
+  namespace: mojaloop
+spec:
+  type: ClusterIP
+  ports:
+    - port: 26379
+      targetPort: 26379
+      name: sentinel
+  selector:
+    app: mojaloop-redis-sentinel

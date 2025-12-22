@@ -1,0 +1,252 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mojaloop
+  labels:
+    app.kubernetes.io/name: mojaloop
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mojaloop-postgres-credentials
+  namespace: mojaloop
+type: Opaque
+stringData:
+  username: mojaloop
+  password: ${POSTGRES_PASSWORD:-mojaloop-secure-password-change-me}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: mojaloop-postgres
+  namespace: mojaloop
+spec:
+  description: "Mojaloop Hub PostgreSQL HA Cluster"
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.2
+  instances: 3
+  
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+  
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      effective_cache_size: "768MB"
+      maintenance_work_mem: "128MB"
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      default_statistics_target: "100"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      work_mem: "6553kB"
+      min_wal_size: "1GB"
+      max_wal_size: "4GB"
+      max_worker_processes: "4"
+      max_parallel_workers_per_gather: "2"
+      max_parallel_workers: "4"
+      max_parallel_maintenance_workers: "2"
+      log_statement: "ddl"
+      log_min_duration_statement: "1000"
+      idle_in_transaction_session_timeout: "60000"
+      statement_timeout: "60000"
+    pg_hba:
+      - host all all 10.0.0.0/8 scram-sha-256
+      - host all all 172.16.0.0/12 scram-sha-256
+      - host all all 192.168.0.0/16 scram-sha-256
+  
+  bootstrap:
+    initdb:
+      database: mojaloop
+      owner: mojaloop
+      secret:
+        name: mojaloop-postgres-credentials
+      postInitSQL:
+        - CREATE DATABASE central_ledger OWNER mojaloop;
+        - CREATE DATABASE account_lookup OWNER mojaloop;
+        - CREATE DATABASE quoting_service OWNER mojaloop;
+        - CREATE DATABASE central_settlement OWNER mojaloop;
+        - CREATE DATABASE bulk_api_adapter OWNER mojaloop;
+        - GRANT ALL PRIVILEGES ON DATABASE central_ledger TO mojaloop;
+        - GRANT ALL PRIVILEGES ON DATABASE account_lookup TO mojaloop;
+        - GRANT ALL PRIVILEGES ON DATABASE quoting_service TO mojaloop;
+        - GRANT ALL PRIVILEGES ON DATABASE central_settlement TO mojaloop;
+        - GRANT ALL PRIVILEGES ON DATABASE bulk_api_adapter TO mojaloop;
+  
+  storage:
+    size: 50Gi
+    storageClass: standard
+  
+  walStorage:
+    size: 10Gi
+    storageClass: standard
+  
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+  
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: required
+  
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://mojaloop-postgres-backups/
+      endpointURL: ${S3_ENDPOINT_URL}
+      s3Credentials:
+        accessKeyId:
+          name: mojaloop-s3-credentials
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: mojaloop-s3-credentials
+          key: SECRET_ACCESS_KEY
+      wal:
+        compression: gzip
+        maxParallel: 2
+      data:
+        compression: gzip
+    retentionPolicy: "30d"
+  
+  monitoring:
+    enablePodMonitor: true
+    customQueriesConfigMap:
+      - name: mojaloop-postgres-metrics
+        key: queries
+  
+  replicationSlots:
+    highAvailability:
+      enabled: true
+    updateInterval: 30
+  
+  switchoverDelay: 60
+  
+  nodeMaintenanceWindow:
+    inProgress: false
+    reusePVC: true
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: mojaloop-postgres-pooler-rw
+  namespace: mojaloop
+spec:
+  cluster:
+    name: mojaloop-postgres
+  instances: 3
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "25"
+      min_pool_size: "5"
+      reserve_pool_size: "5"
+      reserve_pool_timeout: "5"
+      server_reset_query: "DISCARD ALL"
+      server_check_query: "SELECT 1"
+      server_check_delay: "30"
+      query_timeout: "60"
+      client_idle_timeout: "0"
+      client_login_timeout: "60"
+      autodb_idle_timeout: "3600"
+      stats_period: "60"
+      log_connections: "1"
+      log_disconnections: "1"
+      log_pooler_errors: "1"
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: mojaloop-postgres-pooler-ro
+  namespace: mojaloop
+spec:
+  cluster:
+    name: mojaloop-postgres
+  instances: 3
+  type: ro
+  pgbouncer:
+    poolMode: transaction
+    parameters:
+      max_client_conn: "500"
+      default_pool_size: "15"
+      min_pool_size: "3"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mojaloop-postgres-metrics
+  namespace: mojaloop
+data:
+  queries: |
+    mojaloop_transfers:
+      query: "SELECT count(*) as total, state FROM central_ledger.transfer GROUP BY state"
+      master: true
+      metrics:
+        - total:
+            usage: "GAUGE"
+            description: "Total transfers by state"
+        - state:
+            usage: "LABEL"
+            description: "Transfer state"
+    
+    mojaloop_participants:
+      query: "SELECT count(*) as total FROM central_ledger.participant WHERE isActive = true"
+      master: true
+      metrics:
+        - total:
+            usage: "GAUGE"
+            description: "Total active participants"
+    
+    mojaloop_settlements:
+      query: "SELECT count(*) as total, state FROM central_settlement.settlement GROUP BY state"
+      master: true
+      metrics:
+        - total:
+            usage: "GAUGE"
+            description: "Total settlements by state"
+        - state:
+            usage: "LABEL"
+            description: "Settlement state"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mojaloop-postgres-rw
+  namespace: mojaloop
+  labels:
+    app: mojaloop-postgres
+    role: primary
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+      name: postgres
+  selector:
+    cnpg.io/cluster: mojaloop-postgres
+    role: primary
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mojaloop-postgres-ro
+  namespace: mojaloop
+  labels:
+    app: mojaloop-postgres
+    role: replica
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+      name: postgres
+  selector:
+    cnpg.io/cluster: mojaloop-postgres
+    role: replica
