@@ -40,6 +40,11 @@ class ResourceType(str, Enum):
     USER = "user"
     ANALYTICS = "analytics"
     SYSTEM = "system"
+    # Mojaloop interoperability
+    MOJALOOP_PARTY = "mojaloop_party"
+    MOJALOOP_QUOTE = "mojaloop_quote"
+    MOJALOOP_TRANSFER = "mojaloop_transfer"
+    MOJALOOP_SETTLEMENT = "mojaloop_settlement"
 
 
 class Action(str, Enum):
@@ -151,6 +156,19 @@ ROUTE_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     # Admin routes
     "GET /api/v1/admin/users": {"resource": ResourceType.USER, "action": Action.READ, "admin_only": True},
     "POST /api/v1/admin/users/{id}/suspend": {"resource": ResourceType.USER, "action": Action.UPDATE, "admin_only": True},
+    
+    # Mojaloop interoperability routes
+    "GET /api/v1/mojaloop/parties/{id}": {"resource": ResourceType.MOJALOOP_PARTY, "action": Action.READ},
+    "POST /api/v1/mojaloop/parties/lookup": {"resource": ResourceType.MOJALOOP_PARTY, "action": Action.READ},
+    "GET /api/v1/mojaloop/quotes": {"resource": ResourceType.MOJALOOP_QUOTE, "action": Action.READ},
+    "GET /api/v1/mojaloop/quotes/{id}": {"resource": ResourceType.MOJALOOP_QUOTE, "action": Action.READ},
+    "POST /api/v1/mojaloop/quotes": {"resource": ResourceType.MOJALOOP_QUOTE, "action": Action.CREATE},
+    "GET /api/v1/mojaloop/transfers": {"resource": ResourceType.MOJALOOP_TRANSFER, "action": Action.READ},
+    "GET /api/v1/mojaloop/transfers/{id}": {"resource": ResourceType.MOJALOOP_TRANSFER, "action": Action.READ},
+    "POST /api/v1/mojaloop/transfers": {"resource": ResourceType.MOJALOOP_TRANSFER, "action": Action.TRANSFER},
+    "PUT /api/v1/mojaloop/transfers/{id}": {"resource": ResourceType.MOJALOOP_TRANSFER, "action": Action.UPDATE},
+    "GET /api/v1/mojaloop/settlements": {"resource": ResourceType.MOJALOOP_SETTLEMENT, "action": Action.READ, "admin_only": True},
+    "POST /api/v1/mojaloop/settlements/{id}/process": {"resource": ResourceType.MOJALOOP_SETTLEMENT, "action": Action.APPROVE, "admin_only": True},
 }
 
 # Public routes that don't require authorization

@@ -7,6 +7,12 @@ apisix:
     - name: neobank_backend
       nodes:
         "neobank-backend:8000": 1
+    - name: mojaloop_hub
+      nodes:
+        "mojaloop-ml-api-adapter:4000": 1
+    - name: mojaloop_als
+      nodes:
+        "mojaloop-account-lookup-service:4002": 1
 
   # Routes configuration
   routes:
@@ -46,6 +52,130 @@ apisix:
           rate: 20
           burst: 10
           key: "remote_addr"
+
+    # ==================== Mojaloop FSPIOP API Routes ====================
+    
+    # Party Lookup (Account Lookup Service)
+    - uri: /parties/*
+      upstream_id: mojaloop_als
+      plugins:
+        # Keycloak authentication for DFSP access
+        authz-keycloak:
+          token_endpoint: "${KEYCLOAK_URL}/realms/neobank/protocol/openid-connect/token"
+          client_id: "mojaloop-dfsp"
+          client_secret: "${KEYCLOAK_MOJALOOP_SECRET}"
+          grant_type: "client_credentials"
+          ssl_verify: false
+        # Rate limiting for party lookups
+        limit-req:
+          rate: 200
+          burst: 100
+          key: "remote_addr"
+        # Request ID for tracing
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+        # OpenTelemetry tracing
+        opentelemetry:
+          sampler:
+            name: "always_on"
+
+    # Quotes API
+    - uri: /quotes/*
+      upstream_id: mojaloop_hub
+      plugins:
+        authz-keycloak:
+          token_endpoint: "${KEYCLOAK_URL}/realms/neobank/protocol/openid-connect/token"
+          client_id: "mojaloop-dfsp"
+          client_secret: "${KEYCLOAK_MOJALOOP_SECRET}"
+          grant_type: "client_credentials"
+          ssl_verify: false
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "remote_addr"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+        opentelemetry:
+          sampler:
+            name: "always_on"
+
+    # Transfers API
+    - uri: /transfers/*
+      upstream_id: mojaloop_hub
+      plugins:
+        authz-keycloak:
+          token_endpoint: "${KEYCLOAK_URL}/realms/neobank/protocol/openid-connect/token"
+          client_id: "mojaloop-dfsp"
+          client_secret: "${KEYCLOAK_MOJALOOP_SECRET}"
+          grant_type: "client_credentials"
+          ssl_verify: false
+        # Stricter rate limiting for transfers
+        limit-req:
+          rate: 50
+          burst: 25
+          key: "remote_addr"
+        # OPA policy for transfer authorization
+        opa:
+          host: "http://opa:8181"
+          policy: "neobank/mojaloop/transfers"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+        opentelemetry:
+          sampler:
+            name: "always_on"
+
+    # Bulk Transfers API
+    - uri: /bulkTransfers/*
+      upstream_id: mojaloop_hub
+      plugins:
+        authz-keycloak:
+          token_endpoint: "${KEYCLOAK_URL}/realms/neobank/protocol/openid-connect/token"
+          client_id: "mojaloop-dfsp"
+          client_secret: "${KEYCLOAK_MOJALOOP_SECRET}"
+          grant_type: "client_credentials"
+          ssl_verify: false
+        limit-req:
+          rate: 20
+          burst: 10
+          key: "remote_addr"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # Transaction Requests API
+    - uri: /transactionRequests/*
+      upstream_id: mojaloop_hub
+      plugins:
+        authz-keycloak:
+          token_endpoint: "${KEYCLOAK_URL}/realms/neobank/protocol/openid-connect/token"
+          client_id: "mojaloop-dfsp"
+          client_secret: "${KEYCLOAK_MOJALOOP_SECRET}"
+          grant_type: "client_credentials"
+          ssl_verify: false
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "remote_addr"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # Mojaloop DFSP Adapter (internal NeoBank endpoints)
+    - uri: /api/mojaloop/*
+      upstream_id: neobank_backend
+      plugins:
+        jwt-auth:
+          key: "${JWT_SECRET_KEY}"
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "remote_addr"
+        opa:
+          host: "http://opa:8181"
+          policy: "neobank/mojaloop"
 
     # Default route for all other endpoints
     - uri: /*

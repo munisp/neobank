@@ -1,0 +1,167 @@
+---
+# Dapr Configuration for NeoBank Services
+# This configuration enables mTLS, tracing, and resiliency for all Dapr-enabled services
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: neobank-dapr-config
+  namespace: neobank
+spec:
+  # Enable mTLS for service-to-service communication
+  mtls:
+    enabled: true
+    workloadCertTTL: "24h"
+    allowedClockSkew: "15m"
+  
+  # Tracing configuration
+  tracing:
+    samplingRate: "1"
+    otel:
+      endpointAddress: "otel-collector.monitoring:4317"
+      isSecure: false
+      protocol: grpc
+  
+  # Metrics configuration
+  metric:
+    enabled: true
+    rules:
+      - name: neobank-metrics
+        labels:
+          - name: app
+            regex:
+              ".*"
+  
+  # Access control for service invocation
+  accessControl:
+    defaultAction: deny
+    trustDomain: "neobank.local"
+    policies:
+      # Backend API can call all services
+      - appId: backend-api
+        defaultAction: allow
+        trustDomain: "neobank.local"
+        namespace: "neobank"
+      
+      # KYC service can call accounts and notifications
+      - appId: kyc-kyb-service
+        defaultAction: deny
+        trustDomain: "neobank.local"
+        namespace: "neobank"
+        operations:
+          - name: /api/accounts/*
+            httpVerb: ["GET", "POST"]
+            action: allow
+          - name: /api/notifications/*
+            httpVerb: ["POST"]
+            action: allow
+      
+      # Mojaloop DFSP can call TigerBeetle and notifications
+      - appId: mojaloop-dfsp
+        defaultAction: deny
+        trustDomain: "neobank.local"
+        namespace: "neobank"
+        operations:
+          - name: /api/ledger/*
+            httpVerb: ["GET", "POST"]
+            action: allow
+          - name: /api/notifications/*
+            httpVerb: ["POST"]
+            action: allow
+      
+      # Escrow service can call accounts and notifications
+      - appId: escrow-service
+        defaultAction: deny
+        trustDomain: "neobank.local"
+        namespace: "neobank"
+        operations:
+          - name: /api/accounts/*
+            httpVerb: ["GET", "POST"]
+            action: allow
+          - name: /api/ledger/*
+            httpVerb: ["GET", "POST"]
+            action: allow
+
+---
+# Dapr Resiliency Configuration
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: neobank-resiliency
+  namespace: neobank
+spec:
+  policies:
+    # Timeout policies
+    timeouts:
+      general: 30s
+      important: 60s
+      critical: 120s
+    
+    # Retry policies
+    retries:
+      retryForever:
+        policy: constant
+        maxRetries: -1
+        duration: 5s
+      
+      important:
+        policy: exponential
+        maxRetries: 5
+        maxInterval: 30s
+        duration: 1s
+      
+      critical:
+        policy: exponential
+        maxRetries: 10
+        maxInterval: 60s
+        duration: 2s
+    
+    # Circuit breaker policies
+    circuitBreakers:
+      simpleCB:
+        maxRequests: 1
+        interval: 30s
+        timeout: 60s
+        trip: consecutiveFailures >= 5
+      
+      aggressiveCB:
+        maxRequests: 1
+        interval: 60s
+        timeout: 120s
+        trip: consecutiveFailures >= 3
+  
+  targets:
+    # Apply to all apps by default
+    apps:
+      backend-api:
+        timeout: general
+        retry: important
+        circuitBreaker: simpleCB
+      
+      kyc-kyb-service:
+        timeout: important
+        retry: important
+        circuitBreaker: simpleCB
+      
+      mojaloop-dfsp:
+        timeout: critical
+        retry: critical
+        circuitBreaker: aggressiveCB
+      
+      escrow-service:
+        timeout: critical
+        retry: critical
+        circuitBreaker: aggressiveCB
+    
+    # Apply to components
+    components:
+      statestore:
+        outbound:
+          timeout: general
+          retry: important
+          circuitBreaker: simpleCB
+      
+      pubsub:
+        outbound:
+          timeout: important
+          retry: critical
+          circuitBreaker: aggressiveCB

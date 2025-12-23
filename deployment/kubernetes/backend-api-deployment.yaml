@@ -49,6 +49,18 @@ spec:
       labels:
         app: backend-api
         environment: production
+      annotations:
+        # Dapr sidecar configuration
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "backend-api"
+        dapr.io/app-port: "8080"
+        dapr.io/app-protocol: "http"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+        dapr.io/log-level: "info"
+        dapr.io/config: "neobank-dapr-config"
+        # Enable mTLS for service-to-service communication
+        dapr.io/sidecar-seccomp-profile-type: "RuntimeDefault"
     spec:
       # Pod Security Context
       securityContext:

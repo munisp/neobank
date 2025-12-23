@@ -36,6 +36,7 @@ from app.infrastructure.tigerbeetle_client import (
     TransferCode,
     string_to_u128
 )
+from app.infrastructure.redis_client import redis_client
 
 logger = structlog.get_logger(__name__)
 
@@ -396,14 +397,133 @@ class MojaloopDFSPService:
     Mojaloop DFSP Adapter Service.
     
     Implements FSPIOP API for interoperability with other financial institutions.
+    Uses Redis for HA-safe state persistence (quotes, transfers, fulfilments).
     """
+    
+    # Redis key prefixes for Mojaloop state
+    REDIS_PREFIX_QUOTES = "mojaloop:quotes:"
+    REDIS_PREFIX_TRANSFERS = "mojaloop:transfers:"
+    REDIS_PREFIX_FULFILMENTS = "mojaloop:fulfilments:"
+    
+    # TTL for cached state (5 minutes for quotes, 1 hour for transfers)
+    QUOTE_TTL_SECONDS = 300
+    TRANSFER_TTL_SECONDS = 3600
     
     def __init__(self):
         self.security = MojaloopSecurity()
         self.ilp = ILPPacketGenerator()
-        self._quotes: Dict[str, Quote] = {}
-        self._transfers: Dict[str, Transfer] = {}
-        self._pending_fulfilments: Dict[str, str] = {}  # transfer_id -> fulfilment
+        # In-memory fallback for development (when Redis unavailable)
+        self._quotes_fallback: Dict[str, Quote] = {}
+        self._transfers_fallback: Dict[str, Transfer] = {}
+        self._pending_fulfilments_fallback: Dict[str, str] = {}
+    
+    def _store_quote(self, quote_id: str, quote: Quote) -> None:
+        """Store quote in Redis (or fallback to memory)"""
+        quote_data = quote.to_dict()
+        if redis_client.is_available():
+            redis_client.set(
+                f"{self.REDIS_PREFIX_QUOTES}{quote_id}",
+                quote_data,
+                ttl_seconds=self.QUOTE_TTL_SECONDS
+            )
+        else:
+            self._quotes_fallback[quote_id] = quote
+    
+    def _get_quote(self, quote_id: str) -> Optional[Quote]:
+        """Retrieve quote from Redis (or fallback)"""
+        if redis_client.is_available():
+            data = redis_client.get(f"{self.REDIS_PREFIX_QUOTES}{quote_id}")
+            if data:
+                return self._dict_to_quote(data)
+            return None
+        return self._quotes_fallback.get(quote_id)
+    
+    def _store_transfer(self, transfer_id: str, transfer: Transfer) -> None:
+        """Store transfer in Redis (or fallback to memory)"""
+        transfer_data = transfer.to_dict()
+        if redis_client.is_available():
+            redis_client.set(
+                f"{self.REDIS_PREFIX_TRANSFERS}{transfer_id}",
+                transfer_data,
+                ttl_seconds=self.TRANSFER_TTL_SECONDS
+            )
+        else:
+            self._transfers_fallback[transfer_id] = transfer
+    
+    def _get_transfer(self, transfer_id: str) -> Optional[Transfer]:
+        """Retrieve transfer from Redis (or fallback)"""
+        if redis_client.is_available():
+            data = redis_client.get(f"{self.REDIS_PREFIX_TRANSFERS}{transfer_id}")
+            if data:
+                return self._dict_to_transfer(data)
+            return None
+        return self._transfers_fallback.get(transfer_id)
+    
+    def _store_fulfilment(self, transfer_id: str, fulfilment: str) -> None:
+        """Store pending fulfilment in Redis"""
+        if redis_client.is_available():
+            redis_client.set(
+                f"{self.REDIS_PREFIX_FULFILMENTS}{transfer_id}",
+                fulfilment,
+                ttl_seconds=self.TRANSFER_TTL_SECONDS
+            )
+        else:
+            self._pending_fulfilments_fallback[transfer_id] = fulfilment
+    
+    def _get_fulfilment(self, transfer_id: str) -> Optional[str]:
+        """Retrieve pending fulfilment from Redis"""
+        if redis_client.is_available():
+            return redis_client.get(f"{self.REDIS_PREFIX_FULFILMENTS}{transfer_id}")
+        return self._pending_fulfilments_fallback.get(transfer_id)
+    
+    def _dict_to_quote(self, data: Dict[str, Any]) -> Quote:
+        """Convert dictionary to Quote object"""
+        payer_data = data.get("payer", {}).get("partyIdInfo", {})
+        payee_data = data.get("payee", {}).get("partyIdInfo", {})
+        amount_data = data.get("amount", {})
+        
+        return Quote(
+            quote_id=data.get("quoteId", ""),
+            transaction_id=data.get("transactionId", ""),
+            payer=Party(
+                party_id_type=PartyIdType(payer_data.get("partyIdType", "MSISDN")),
+                party_id=payer_data.get("partyIdentifier", ""),
+                fsp_id=payer_data.get("fspId")
+            ),
+            payee=Party(
+                party_id_type=PartyIdType(payee_data.get("partyIdType", "MSISDN")),
+                party_id=payee_data.get("partyIdentifier", ""),
+                fsp_id=payee_data.get("fspId")
+            ),
+            amount_type=AmountType(data.get("amountType", "SEND")),
+            amount=Money(
+                currency=amount_data.get("currency", "USD"),
+                amount=amount_data.get("amount", "0")
+            ),
+            expiration=data.get("expiration"),
+            ilp_packet=data.get("ilpPacket"),
+            condition=data.get("condition")
+        )
+    
+    def _dict_to_transfer(self, data: Dict[str, Any]) -> Transfer:
+        """Convert dictionary to Transfer object"""
+        amount_data = data.get("amount", {})
+        
+        return Transfer(
+            transfer_id=data.get("transferId", ""),
+            payer_fsp=data.get("payerFsp", ""),
+            payee_fsp=data.get("payeeFsp", ""),
+            amount=Money(
+                currency=amount_data.get("currency", "USD"),
+                amount=amount_data.get("amount", "0")
+            ),
+            ilp_packet=data.get("ilpPacket", ""),
+            condition=data.get("condition", ""),
+            expiration=data.get("expiration", ""),
+            state=TransferState(data.get("transferState", "RECEIVED")),
+            fulfilment=data.get("fulfilment"),
+            completed_timestamp=data.get("completedTimestamp")
+        )
     
     async def _make_request(
         self,
@@ -545,8 +665,8 @@ class MojaloopDFSPService:
         # Generate ILP condition
         condition, fulfilment = self.ilp.generate_condition()
         
-        # Store fulfilment for later
-        self._pending_fulfilments[transaction_id] = fulfilment
+        # Store fulfilment for later (Redis-backed for HA)
+        self._store_fulfilment(transaction_id, fulfilment)
         
         # Calculate expiration
         expiration = datetime.now(timezone.utc) + timedelta(
@@ -573,8 +693,8 @@ class MojaloopDFSPService:
         )
         
         if result:
-            # Store quote
-            self._quotes[quote_id] = quote
+            # Store quote (Redis-backed for HA)
+            self._store_quote(quote_id, quote)
             return quote
         
         return None
@@ -606,8 +726,8 @@ class MojaloopDFSPService:
         )
         condition, fulfilment = self.ilp.generate_condition()
         
-        # Store fulfilment
-        self._pending_fulfilments[quote_id] = fulfilment
+        # Store fulfilment (Redis-backed for HA)
+        self._store_fulfilment(quote_id, fulfilment)
         
         ilp_packet = self.ilp.generate_packet(
             destination_account=f"g.neobank.{quote_request.get('payee', {}).get('partyIdInfo', {}).get('partyIdentifier', '')}",
@@ -704,7 +824,8 @@ class MojaloopDFSPService:
         )
         
         if result:
-            self._transfers[transfer_id] = transfer
+            # Store transfer (Redis-backed for HA)
+            self._store_transfer(transfer_id, transfer)
             return transfer
         else:
             # Void the pending transfer
@@ -743,8 +864,8 @@ class MojaloopDFSPService:
             logger.error("Failed to decode ILP packet")
             return None
         
-        # Get fulfilment for this transfer
-        fulfilment = self._pending_fulfilments.get(transfer_id)
+        # Get fulfilment for this transfer (Redis-backed for HA)
+        fulfilment = self._get_fulfilment(transfer_id)
         if not fulfilment:
             # Generate new fulfilment if we don't have one
             # (This happens when we're the payee DFSP)
@@ -786,7 +907,8 @@ class MojaloopDFSPService:
         
         Verify fulfilment and commit the pending transfer.
         """
-        transfer = self._transfers.get(transfer_id)
+        # Get transfer from Redis (HA-safe)
+        transfer = self._get_transfer(transfer_id)
         if not transfer:
             logger.error("Transfer not found", transfer_id=transfer_id)
             return False
@@ -806,10 +928,11 @@ class MojaloopDFSPService:
             logger.error("Failed to commit transfer", error=error)
             return False
         
-        # Update transfer state
+        # Update transfer state and persist
         transfer.state = TransferState.COMMITTED
         transfer.fulfilment = fulfilment
         transfer.completed_timestamp = datetime.now(timezone.utc).isoformat()
+        self._store_transfer(transfer_id, transfer)
         
         logger.info("Transfer committed", transfer_id=transfer_id)
         return True
@@ -824,7 +947,8 @@ class MojaloopDFSPService:
         
         Void the pending transfer and release reserved funds.
         """
-        transfer = self._transfers.get(transfer_id)
+        # Get transfer from Redis (HA-safe)
+        transfer = self._get_transfer(transfer_id)
         if not transfer:
             logger.error("Transfer not found", transfer_id=transfer_id)
             return False
@@ -839,8 +963,9 @@ class MojaloopDFSPService:
             logger.error("Failed to void transfer", error=error)
             return False
         
-        # Update transfer state
+        # Update transfer state and persist
         transfer.state = TransferState.ABORTED
+        self._store_transfer(transfer_id, transfer)
         
         logger.info("Transfer aborted", transfer_id=transfer_id, error=error_info)
         return True

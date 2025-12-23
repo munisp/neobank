@@ -137,17 +137,26 @@ class TigerBeetleClient:
     def _initialize_client(self):
         """Initialize TigerBeetle client connection"""
         try:
-            # Connect to TigerBeetle cluster
-            # In production, use actual cluster addresses
-            cluster_id = 0
-            addresses = ["3000"]  # Default port
+            # Connect to TigerBeetle cluster - production-ready configuration
+            cluster_id = int(os.getenv("TIGERBEETLE_CLUSTER_ID", "0"))
+            
+            # Get addresses from environment or use defaults
+            # Format: comma-separated list of host:port
+            addresses_env = os.getenv("TIGERBEETLE_ADDRESSES", "")
+            if addresses_env:
+                addresses = [addr.strip() for addr in addresses_env.split(",")]
+            else:
+                # Default for local development
+                addresses = [os.getenv("TIGERBEETLE_ADDRESS", "127.0.0.1:3000")]
             
             self._client = Client(
                 cluster_id=cluster_id,
                 replica_addresses=addresses
             )
             
-            logger.info("TigerBeetle client initialized", cluster_id=cluster_id)
+            logger.info("TigerBeetle client initialized", 
+                       cluster_id=cluster_id, 
+                       addresses=addresses)
             
         except Exception as e:
             logger.error("Failed to initialize TigerBeetle client", error=str(e))
