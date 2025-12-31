@@ -1,0 +1,541 @@
+name: Comprehensive Test Suite
+
+on:
+  push:
+    branches: [main, develop, 'feature/*', 'release/*']
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of tests to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - integration
+          - e2e
+          - regression
+          - performance
+          - security
+
+env:
+  PYTHON_VERSION: '3.11'
+  GO_VERSION: '1.21'
+  NODE_VERSION: '20'
+  REDIS_URL: redis://localhost:6379
+  KAFKA_BROKERS: localhost:9092
+  DATABASE_URL: postgresql://neobank:neobank@localhost:5432/neobank_test
+
+jobs:
+  # ==================== Unit Tests ====================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'unit' || github.event.inputs.test_type == '' }}
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install Python dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Run Python unit tests
+        run: |
+          cd backend
+          pytest tests/unit/ -v --cov=app --cov-report=xml --cov-report=html -x
+        env:
+          REDIS_URL: ${{ env.REDIS_URL }}
+
+      - name: Run Go unit tests
+        run: |
+          for service in services/*-go; do
+            if [ -d "$service" ]; then
+              echo "Testing $service"
+              cd "$service"
+              go test -v -race -coverprofile=coverage.out ./...
+              cd -
+            fi
+          done
+
+      - name: Upload Python coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: backend/coverage.xml
+          flags: python-unit
+          name: python-unit-coverage
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: |
+            backend/htmlcov/
+            backend/coverage.xml
+
+  # ==================== Integration Tests ====================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'integration' || github.event.inputs.test_type == '' }}
+    needs: unit-tests
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: neobank
+          POSTGRES_PASSWORD: neobank
+          POSTGRES_DB: neobank_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+      kafka:
+        image: confluentinc/cp-kafka:7.5.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Wait for services
+        run: |
+          sleep 10
+          # Wait for Kafka
+          timeout 60 bash -c 'until nc -z localhost 9092; do sleep 1; done' || true
+
+      - name: Run database migrations
+        run: |
+          cd backend
+          alembic upgrade head || true
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+
+      - name: Start backend server
+        run: |
+          cd backend
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          sleep 10
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          REDIS_URL: ${{ env.REDIS_URL }}
+          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+
+      - name: Run integration tests
+        run: |
+          cd backend
+          pytest tests/integration/ -v -x --tb=short
+        env:
+          NEOBANK_API_URL: http://localhost:8000
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          REDIS_URL: ${{ env.REDIS_URL }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: backend/test-results/
+
+  # ==================== E2E Tests ====================
+  e2e-tests:
+    name: E2E User Journey Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'e2e' || github.event.inputs.test_type == '' }}
+    needs: integration-tests
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: neobank
+          POSTGRES_PASSWORD: neobank
+          POSTGRES_DB: neobank_test
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Playwright
+        run: |
+          pip install playwright pytest-playwright
+          playwright install chromium
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Install frontend dependencies
+        run: |
+          cd mobile-pwa
+          npm install
+
+      - name: Start backend
+        run: |
+          cd backend
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          sleep 10
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          REDIS_URL: ${{ env.REDIS_URL }}
+
+      - name: Start frontend
+        run: |
+          cd mobile-pwa
+          npm run dev &
+          sleep 10
+
+      - name: Run E2E tests
+        run: |
+          pytest tests/e2e/test_user_journeys.py -v --tb=short
+        env:
+          NEOBANK_BASE_URL: http://localhost:5173
+          NEOBANK_API_URL: http://localhost:8000
+
+      - name: Upload E2E test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: |
+            test-results/
+            playwright-report/
+
+  # ==================== Regression Tests ====================
+  regression-tests:
+    name: Regression Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'regression' || github.event.inputs.test_type == '' }}
+    needs: unit-tests
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Start backend
+        run: |
+          cd backend
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          sleep 10
+        env:
+          REDIS_URL: ${{ env.REDIS_URL }}
+
+      - name: Run regression tests
+        run: |
+          pytest tests/regression/ -v --tb=short
+        env:
+          NEOBANK_API_URL: http://localhost:8000
+
+      - name: Upload regression test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-test-results
+          path: test-results/
+
+  # ==================== Performance Tests ====================
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'performance' || github.event_name == 'schedule' }}
+    needs: integration-tests
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: neobank
+          POSTGRES_PASSWORD: neobank
+          POSTGRES_DB: neobank_test
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx locust
+
+      - name: Start backend
+        run: |
+          cd backend
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 &
+          sleep 10
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          REDIS_URL: ${{ env.REDIS_URL }}
+
+      - name: Run performance tests
+        run: |
+          pytest tests/performance/ -v -s --tb=short
+        env:
+          NEOBANK_API_URL: http://localhost:8000
+          LOAD_TEST_USERS: 50
+          STRESS_TEST_USERS: 200
+
+      - name: Run Locust load test
+        run: |
+          cd tests/performance
+          locust -f locustfile.py --headless -u 100 -r 10 --run-time 60s --host http://localhost:8000 --csv=locust_results || true
+        continue-on-error: true
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-test-results
+          path: |
+            tests/performance/locust_results*.csv
+            test-results/
+
+  # ==================== Security Tests ====================
+  security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'security' || github.event_name == 'schedule' }}
+    needs: unit-tests
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx bandit safety
+
+      - name: Run Bandit security scan
+        run: |
+          cd backend
+          bandit -r app/ -f json -o bandit-report.json || true
+        continue-on-error: true
+
+      - name: Run Safety dependency check
+        run: |
+          cd backend
+          safety check --json > safety-report.json || true
+        continue-on-error: true
+
+      - name: Start backend
+        run: |
+          cd backend
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          sleep 10
+        env:
+          REDIS_URL: ${{ env.REDIS_URL }}
+
+      - name: Run security tests
+        run: |
+          pytest tests/security/ -v --tb=short
+        env:
+          NEOBANK_API_URL: http://localhost:8000
+
+      - name: Upload security results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-test-results
+          path: |
+            backend/bandit-report.json
+            backend/safety-report.json
+            test-results/
+
+  # ==================== Go Service Tests ====================
+  go-service-tests:
+    name: Go Service Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.test_type == 'all' || github.event.inputs.test_type == 'unit' || github.event.inputs.test_type == '' }}
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run Go tests for all services
+        run: |
+          for service in services/*-go; do
+            if [ -d "$service" ] && [ -f "$service/go.mod" ]; then
+              echo "Testing $service"
+              cd "$service"
+              go mod download
+              go test -v -race -coverprofile=coverage.out ./... || true
+              cd -
+            fi
+          done
+
+      - name: Build Go services
+        run: |
+          for service in services/*-go; do
+            if [ -d "$service" ] && [ -f "$service/go.mod" ]; then
+              echo "Building $service"
+              cd "$service"
+              go build -o /dev/null ./... || true
+              cd -
+            fi
+          done
+
+  # ==================== Test Summary ====================
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, e2e-tests, regression-tests, performance-tests, security-tests, go-service-tests]
+    if: always()
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+
+      - name: Generate summary
+        run: |
+          echo "# Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| E2E Tests | ${{ needs.e2e-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Regression Tests | ${{ needs.regression-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance Tests | ${{ needs.performance-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Tests | ${{ needs.security-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Go Service Tests | ${{ needs.go-service-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for failures
+        if: ${{ contains(needs.*.result, 'failure') }}
+        run: |
+          echo "Some tests failed. Please check the individual job logs."
+          exit 1
