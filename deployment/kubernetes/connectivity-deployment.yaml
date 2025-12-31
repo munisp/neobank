@@ -1,0 +1,160 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: connectivity-service
+  namespace: neobank
+  labels:
+    app: connectivity-service
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: connectivity-service
+  template:
+    metadata:
+      labels:
+        app: connectivity-service
+        version: v1
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "connectivity-service"
+        dapr.io/app-port: "8089"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: neobank-service
+      containers:
+        - name: connectivity-service
+          image: neobank/connectivity-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8089
+              name: http
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: PORT
+              value: "8089"
+            - name: REDIS_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: address
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: password
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: kafka-config
+                  key: brokers
+            - name: DAPR_HTTP_PORT
+              value: "3500"
+            - name: TIGERBEETLE_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: tigerbeetle-config
+                  key: address
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8089
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8089
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - connectivity-service
+                topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: connectivity-service
+  namespace: neobank
+  labels:
+    app: connectivity-service
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8089
+      targetPort: 8089
+      protocol: TCP
+      name: http
+    - port: 9090
+      targetPort: 9090
+      protocol: TCP
+      name: metrics
+  selector:
+    app: connectivity-service
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: connectivity-service-hpa
+  namespace: neobank
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: connectivity-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: connectivity-service-pdb
+  namespace: neobank
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: connectivity-service

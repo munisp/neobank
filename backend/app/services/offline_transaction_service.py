@@ -112,14 +112,14 @@ class OfflineTransactionService:
     Uses HMAC-SHA256 for transaction signing (simpler than ECDSA for mobile).
     """
     
-    # Transaction expiry time (24 hours)
-    TRANSACTION_EXPIRY_HOURS = 24
+    # Transaction expiry time (72 hours for remote/rural areas)
+    TRANSACTION_EXPIRY_HOURS = 72
     
-    # Maximum offline transactions per user
-    MAX_OFFLINE_TRANSACTIONS = 50
+    # Maximum offline transactions per user (increased for extended offline periods)
+    MAX_OFFLINE_TRANSACTIONS = 100
     
-    # Maximum offline transaction amount
-    MAX_OFFLINE_AMOUNT = Decimal("100000")
+    # Maximum offline transaction amount (increased for business users)
+    MAX_OFFLINE_AMOUNT = Decimal("500000")
     
     def __init__(self):
         # In production, these would be database-backed

@@ -21,6 +21,11 @@ from app.middleware.rate_limiting import RateLimitMiddleware
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.auth import AuthenticationMiddleware
 from app.middleware.pbac_middleware import PBACMiddleware
+from app.middleware.connectivity_middleware import (
+    ConnectivityMiddleware,
+    ProgressiveLoadingMiddleware,
+    OfflineSyncMiddleware,
+)
 from app.routers import auth, accounts, transactions, kyc, dashboard, fraud
 from app.exceptions import setup_exception_handlers
 from app.services.opa_service import initialize_opa_service, close_opa_service, opa_service
@@ -118,6 +123,10 @@ def create_application() -> FastAPI:
     app.add_middleware(AuthenticationMiddleware)
     # PBAC middleware - enforces policy-based access control using OPA and Permify
     app.add_middleware(PBACMiddleware, use_opa=True, use_permify=True)
+    # Connectivity middleware - adaptive data handling for low-connectivity environments
+    app.add_middleware(ConnectivityMiddleware)
+    app.add_middleware(ProgressiveLoadingMiddleware)
+    app.add_middleware(OfflineSyncMiddleware)
     
     # Exception handlers
     setup_exception_handlers(app)
@@ -337,6 +346,11 @@ def create_application() -> FastAPI:
     from app.routers import mojaloop_router
     app.include_router(mojaloop_router.router, prefix="/api/v1", tags=["Mojaloop"])
     app.include_router(mojaloop_router.router, prefix="/api", tags=["Mojaloop"])
+    
+    # Connectivity (Power management, Adaptive data, Offline sync, Data saver)
+    from app.routers import connectivity_router
+    app.include_router(connectivity_router.router, prefix="/api/v1/connectivity", tags=["Connectivity"])
+    app.include_router(connectivity_router.router, prefix="/api/connectivity", tags=["Connectivity"])
     
     return app
 

@@ -177,6 +177,111 @@ apisix:
           host: "http://opa:8181"
           policy: "neobank/mojaloop"
 
+    # ==================== Connectivity Service Routes ====================
+    
+    # Power Management - Battery-aware sync policies
+    - uri: /api/v1/connectivity/power/*
+      upstream_id: neobank_backend
+      plugins:
+        # Adaptive compression based on connection type
+        gzip:
+          min_length: 1024
+          types:
+            - "application/json"
+        # Caching for sync policies
+        proxy-cache:
+          cache_key:
+            - "$uri"
+            - "$arg_device_id"
+          cache_ttl: 60
+        # Rate limiting
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "remote_addr"
+
+    # Adaptive Data - Network quality based optimization
+    - uri: /api/v1/connectivity/adaptive/*
+      upstream_id: neobank_backend
+      plugins:
+        gzip:
+          min_length: 512
+          types:
+            - "application/json"
+        proxy-cache:
+          cache_key:
+            - "$uri"
+            - "$arg_device_id"
+          cache_ttl: 30
+        limit-req:
+          rate: 200
+          burst: 100
+          key: "remote_addr"
+
+    # Offline Transactions - Extended offline support (72 hours)
+    - uri: /api/v1/connectivity/offline/*
+      upstream_id: neobank_backend
+      plugins:
+        # No caching for offline transactions
+        jwt-auth:
+          key: "${JWT_SECRET_KEY}"
+        # OPA policy for offline transaction limits
+        opa:
+          host: "http://opa:8181"
+          policy: "neobank/offline_transactions"
+        limit-req:
+          rate: 50
+          burst: 25
+          key: "remote_addr"
+        # Request ID for tracing
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # Conflict Resolution
+    - uri: /api/v1/connectivity/conflicts/*
+      upstream_id: neobank_backend
+      plugins:
+        jwt-auth:
+          key: "${JWT_SECRET_KEY}"
+        limit-req:
+          rate: 50
+          burst: 25
+          key: "remote_addr"
+
+    # Data Saver Settings
+    - uri: /api/v1/connectivity/datasaver/*
+      upstream_id: neobank_backend
+      plugins:
+        jwt-auth:
+          key: "${JWT_SECRET_KEY}"
+        proxy-cache:
+          cache_key:
+            - "$uri"
+          cache_ttl: 300
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "remote_addr"
+
+    # Progressive Loading - Skeleton data and loading plans
+    - uri: /api/v1/connectivity/loading/*
+      upstream_id: neobank_backend
+      plugins:
+        gzip:
+          min_length: 256
+          types:
+            - "application/json"
+        proxy-cache:
+          cache_key:
+            - "$uri"
+            - "$arg_screen_type"
+          cache_ttl: 3600
+        limit-req:
+          rate: 500
+          burst: 200
+          key: "remote_addr"
+
     # Default route for all other endpoints
     - uri: /*
       upstream_id: neobank_backend
