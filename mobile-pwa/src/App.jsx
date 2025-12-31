@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import './App.css'
 
+// Currency formatter to ensure proper Naira symbol rendering
+const formatNaira = (amount) => `\u20A6${amount.toLocaleString()}`
+
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [darkMode, setDarkMode] = useState(false)
@@ -9,11 +12,21 @@ function App() {
   const [buyQuantity, setBuyQuantity] = useState(1)
   const [orderType, setOrderType] = useState('market')
   const [showConfirmation, setShowConfirmation] = useState(false)
-    const [showSuccess, setShowSuccess] = useState(false)
-    const [paymentMethod, setPaymentMethod] = useState('fiat') // 'fiat' or 'stablecoin'
-    const [selectedStablecoin, setSelectedStablecoin] = useState('USDT')
-    const [kycCountry, setKycCountry] = useState('NG')
-    const [kycStep, setKycStep] = useState(1)
+  const [showSuccess, setShowSuccess] = useState(false)
+  const [paymentMethod, setPaymentMethod] = useState('fiat') // 'fiat' or 'stablecoin'
+  const [selectedStablecoin, setSelectedStablecoin] = useState('USDT')
+  const [kycCountry, setKycCountry] = useState('NG')
+  const [kycStep, setKycStep] = useState(1)
+  // Quick Actions modal states
+  const [showSendModal, setShowSendModal] = useState(false)
+  const [showRequestModal, setShowRequestModal] = useState(false)
+  const [showPayBillsModal, setShowPayBillsModal] = useState(false)
+  const [showTopUpModal, setShowTopUpModal] = useState(false)
+  const [quickActionAmount, setQuickActionAmount] = useState('')
+  const [quickActionRecipient, setQuickActionRecipient] = useState('')
+  const [quickActionSuccess, setQuickActionSuccess] = useState(false)
+  // Navigation state for "More" menu
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
 
     const stablecoins = [
       { symbol: 'USDT', name: 'Tether USD', balance: 5000.00 },
@@ -86,12 +99,22 @@ function App() {
           <div className="bg-white p-4 rounded-lg shadow">
             <h3 className="font-semibold mb-3">Quick Actions</h3>
             <div className="grid grid-cols-4 gap-2">
-              {['Send', 'Request', 'Pay Bills', 'Top Up'].map((action, i) => (
-                <button key={i} className="flex flex-col items-center p-2 bg-gray-50 rounded-lg hover:bg-gray-100">
-                  <span className="text-2xl">{['💸', '📥', '📄', '📱'][i]}</span>
-                  <span className="text-xs mt-1">{action}</span>
-                </button>
-              ))}
+              <button onClick={() => setShowSendModal(true)} className="flex flex-col items-center p-2 bg-gray-50 rounded-lg hover:bg-blue-50 hover:border-blue-200 border border-transparent transition-colors">
+                <span className="text-2xl">💸</span>
+                <span className="text-xs mt-1">Send</span>
+              </button>
+              <button onClick={() => setShowRequestModal(true)} className="flex flex-col items-center p-2 bg-gray-50 rounded-lg hover:bg-green-50 hover:border-green-200 border border-transparent transition-colors">
+                <span className="text-2xl">📥</span>
+                <span className="text-xs mt-1">Request</span>
+              </button>
+              <button onClick={() => setShowPayBillsModal(true)} className="flex flex-col items-center p-2 bg-gray-50 rounded-lg hover:bg-purple-50 hover:border-purple-200 border border-transparent transition-colors">
+                <span className="text-2xl">📄</span>
+                <span className="text-xs mt-1">Pay Bills</span>
+              </button>
+              <button onClick={() => setShowTopUpModal(true)} className="flex flex-col items-center p-2 bg-gray-50 rounded-lg hover:bg-orange-50 hover:border-orange-200 border border-transparent transition-colors">
+                <span className="text-2xl">📱</span>
+                <span className="text-xs mt-1">Top Up</span>
+              </button>
             </div>
           </div>
           <div className="bg-white p-4 rounded-lg shadow">
@@ -763,21 +786,30 @@ function App() {
         {features[activeTab].content}
       </main>
 
-      {/* Bottom Navigation */}
+      {/* Bottom Navigation - Optimized for mobile (5 main tabs + More) */}
       <nav className={`fixed bottom-0 left-0 right-0 ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg border-t z-10`}>
-        <div className="flex justify-around py-2 overflow-x-auto">
-          {tabs.map((tab) => (
+        <div className="flex justify-around py-2">
+          {['dashboard', 'investments', 'savings', 'bnpl', 'telecom'].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`flex flex-col items-center p-2 min-w-[60px] transition-colors ${
+              className={`flex flex-col items-center p-2 min-w-[56px] transition-colors ${
                 activeTab === tab ? 'text-blue-500' : darkMode ? 'text-gray-400' : 'text-gray-500'
               }`}
             >
               <span className="text-xl">{features[tab].icon}</span>
-              <span className="text-xs mt-1">{features[tab].title}</span>
+              <span className="text-[10px] mt-1">{features[tab].title}</span>
             </button>
           ))}
+          <button
+            onClick={() => setShowMoreMenu(true)}
+            className={`flex flex-col items-center p-2 min-w-[56px] transition-colors ${
+              ['rewards', 'insurance', 'accounts', 'kyc', 'escrow'].includes(activeTab) ? 'text-blue-500' : darkMode ? 'text-gray-400' : 'text-gray-500'
+            }`}
+          >
+            <span className="text-xl">☰</span>
+            <span className="text-[10px] mt-1">More</span>
+          </button>
         </div>
       </nav>
 
@@ -1008,6 +1040,225 @@ function App() {
             <p className="text-sm text-gray-500">
               You will receive a notification once your order is executed.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Send Money Modal */}
+      {showSendModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-50">
+          <div className="bg-white rounded-t-3xl w-full max-w-lg p-6 animate-slide-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">Send Money</h3>
+              <button onClick={() => { setShowSendModal(false); setQuickActionAmount(''); setQuickActionRecipient(''); }} className="text-gray-500 text-2xl">&times;</button>
+            </div>
+            {quickActionSuccess ? (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-3xl text-white">✓</span>
+                </div>
+                <h4 className="text-xl font-bold text-green-600 mb-2">Transfer Successful!</h4>
+                <p className="text-gray-600">Your money has been sent.</p>
+                <button onClick={() => { setShowSendModal(false); setQuickActionSuccess(false); setQuickActionAmount(''); setQuickActionRecipient(''); }} className="mt-4 bg-blue-500 text-white px-6 py-2 rounded-lg">Done</button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Recipient</label>
+                    <input type="text" value={quickActionRecipient} onChange={(e) => setQuickActionRecipient(e.target.value)} placeholder="Enter phone number or account" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Amount</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-3 text-gray-500">{'\u20A6'}</span>
+                      <input type="number" value={quickActionAmount} onChange={(e) => setQuickActionAmount(e.target.value)} placeholder="0.00" className="w-full p-3 pl-8 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-xl" />
+                    </div>
+                  </div>
+                  <div className="bg-gray-50 p-3 rounded-lg">
+                    <p className="text-sm text-gray-500">Available Balance</p>
+                    <p className="text-lg font-bold">{'\u20A6'}2,450,000.00</p>
+                  </div>
+                </div>
+                <button onClick={() => setQuickActionSuccess(true)} disabled={!quickActionAmount || !quickActionRecipient} className="w-full mt-6 bg-blue-500 text-white py-4 rounded-xl font-bold text-lg hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
+                  Send Money
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Request Money Modal */}
+      {showRequestModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-50">
+          <div className="bg-white rounded-t-3xl w-full max-w-lg p-6 animate-slide-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">Request Money</h3>
+              <button onClick={() => { setShowRequestModal(false); setQuickActionAmount(''); setQuickActionRecipient(''); }} className="text-gray-500 text-2xl">&times;</button>
+            </div>
+            {quickActionSuccess ? (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-3xl text-white">✓</span>
+                </div>
+                <h4 className="text-xl font-bold text-green-600 mb-2">Request Sent!</h4>
+                <p className="text-gray-600">Your payment request has been sent.</p>
+                <button onClick={() => { setShowRequestModal(false); setQuickActionSuccess(false); setQuickActionAmount(''); setQuickActionRecipient(''); }} className="mt-4 bg-green-500 text-white px-6 py-2 rounded-lg">Done</button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Request From</label>
+                    <input type="text" value={quickActionRecipient} onChange={(e) => setQuickActionRecipient(e.target.value)} placeholder="Enter phone number or email" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Amount</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-3 text-gray-500">{'\u20A6'}</span>
+                      <input type="number" value={quickActionAmount} onChange={(e) => setQuickActionAmount(e.target.value)} placeholder="0.00" className="w-full p-3 pl-8 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-xl" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Note (optional)</label>
+                    <input type="text" placeholder="What's this for?" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none" />
+                  </div>
+                </div>
+                <button onClick={() => setQuickActionSuccess(true)} disabled={!quickActionAmount || !quickActionRecipient} className="w-full mt-6 bg-green-500 text-white py-4 rounded-xl font-bold text-lg hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
+                  Send Request
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Pay Bills Modal */}
+      {showPayBillsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-50">
+          <div className="bg-white rounded-t-3xl w-full max-w-lg p-6 animate-slide-up max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">Pay Bills</h3>
+              <button onClick={() => setShowPayBillsModal(false)} className="text-gray-500 text-2xl">&times;</button>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { name: 'Electricity', icon: '⚡', color: 'bg-yellow-100' },
+                { name: 'Water', icon: '💧', color: 'bg-blue-100' },
+                { name: 'Internet', icon: '🌐', color: 'bg-purple-100' },
+                { name: 'Cable TV', icon: '📺', color: 'bg-red-100' },
+                { name: 'Rent', icon: '🏠', color: 'bg-green-100' },
+                { name: 'Insurance', icon: '🛡️', color: 'bg-indigo-100' },
+                { name: 'School Fees', icon: '🎓', color: 'bg-pink-100' },
+                { name: 'Tax', icon: '📋', color: 'bg-gray-100' },
+                { name: 'More', icon: '➕', color: 'bg-slate-100' },
+              ].map((bill, i) => (
+                <button key={i} className={`${bill.color} p-4 rounded-xl flex flex-col items-center hover:opacity-80 transition-opacity`}>
+                  <span className="text-2xl mb-1">{bill.icon}</span>
+                  <span className="text-xs font-medium">{bill.name}</span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 bg-gray-50 p-3 rounded-lg">
+              <h4 className="font-medium mb-2">Recent Bills</h4>
+              <div className="space-y-2">
+                {[
+                  { name: 'IKEDC Electricity', amount: '₦15,000', date: 'Due Dec 31' },
+                  { name: 'DSTV Premium', amount: '₦24,500', date: 'Due Jan 5' },
+                ].map((bill, i) => (
+                  <div key={i} className="flex justify-between items-center p-2 bg-white rounded-lg">
+                    <div>
+                      <p className="text-sm font-medium">{bill.name}</p>
+                      <p className="text-xs text-gray-500">{bill.date}</p>
+                    </div>
+                    <button className="bg-purple-500 text-white px-3 py-1 rounded-lg text-sm">Pay {bill.amount}</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Top Up Modal */}
+      {showTopUpModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-50">
+          <div className="bg-white rounded-t-3xl w-full max-w-lg p-6 animate-slide-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">Top Up</h3>
+              <button onClick={() => { setShowTopUpModal(false); setQuickActionAmount(''); }} className="text-gray-500 text-2xl">&times;</button>
+            </div>
+            {quickActionSuccess ? (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-3xl text-white">✓</span>
+                </div>
+                <h4 className="text-xl font-bold text-green-600 mb-2">Top Up Successful!</h4>
+                <p className="text-gray-600">Your airtime has been credited.</p>
+                <button onClick={() => { setShowTopUpModal(false); setQuickActionSuccess(false); setQuickActionAmount(''); }} className="mt-4 bg-orange-500 text-white px-6 py-2 rounded-lg">Done</button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Select Network</label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {['MTN', 'Airtel', 'Glo', '9mobile'].map((network, i) => (
+                        <button key={i} className="p-3 border-2 rounded-lg text-center hover:border-orange-500 hover:bg-orange-50 transition-colors">
+                          <span className="text-sm font-medium">{network}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Phone Number</label>
+                    <input type="tel" placeholder="Enter phone number" className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Amount</label>
+                    <div className="grid grid-cols-4 gap-2 mb-2">
+                      {['100', '200', '500', '1000'].map((amt, i) => (
+                        <button key={i} onClick={() => setQuickActionAmount(amt)} className={`p-2 border rounded-lg text-center hover:border-orange-500 ${quickActionAmount === amt ? 'border-orange-500 bg-orange-50' : ''}`}>
+                          {'\u20A6'}{amt}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="relative">
+                      <span className="absolute left-3 top-3 text-gray-500">{'\u20A6'}</span>
+                      <input type="number" value={quickActionAmount} onChange={(e) => setQuickActionAmount(e.target.value)} placeholder="Or enter amount" className="w-full p-3 pl-8 border rounded-lg focus:ring-2 focus:ring-orange-500 outline-none" />
+                    </div>
+                  </div>
+                </div>
+                <button onClick={() => setQuickActionSuccess(true)} disabled={!quickActionAmount} className="w-full mt-6 bg-orange-500 text-white py-4 rounded-xl font-bold text-lg hover:bg-orange-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors">
+                  Buy Airtime
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* More Menu Modal for Navigation */}
+      {showMoreMenu && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-end justify-center z-50" onClick={() => setShowMoreMenu(false)}>
+          <div className="bg-white rounded-t-3xl w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold">More Services</h3>
+              <button onClick={() => setShowMoreMenu(false)} className="text-gray-500 text-2xl">&times;</button>
+            </div>
+            <div className="grid grid-cols-4 gap-4">
+              {['rewards', 'insurance', 'accounts', 'kyc', 'escrow'].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => { setActiveTab(tab); setShowMoreMenu(false); }}
+                  className="flex flex-col items-center p-3 bg-gray-50 rounded-xl hover:bg-blue-50 transition-colors"
+                >
+                  <span className="text-2xl">{features[tab].icon}</span>
+                  <span className="text-xs mt-1 font-medium">{features[tab].title}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
