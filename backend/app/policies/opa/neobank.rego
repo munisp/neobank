@@ -339,6 +339,146 @@ allow if {
 }
 
 # ============================================
+# COMMODITIES TRADING POLICIES
+# ============================================
+
+# Commodities trading limits by KYC tier (in USD)
+commodities_limits := {
+    "tier_0": {"daily": 0, "single": 0},
+    "tier_1": {"daily": 1000, "single": 500},
+    "tier_2": {"daily": 50000, "single": 10000},
+    "tier_3": {"daily": 500000, "single": 100000}
+}
+
+# Allowed commodity categories by KYC tier
+allowed_commodity_categories := {
+    "tier_0": [],
+    "tier_1": ["agricultural", "energy"],
+    "tier_2": ["agricultural", "energy", "metals", "livestock"],
+    "tier_3": ["agricultural", "energy", "metals", "livestock", "precious_metals", "rare_earth"]
+}
+
+# Users can view commodity market data
+allow if {
+    input.action == "read"
+    input.resource.type == "commodity"
+}
+
+# Users can view their commodity portfolio
+allow if {
+    input.action == "read"
+    input.resource.type == "commodity_portfolio"
+    input.resource.user_id == input.user.id
+}
+
+# Users can trade commodities if KYC tier >= 1 and within limits
+allow if {
+    input.action in ["buy", "sell"]
+    input.resource.type == "commodity"
+    input.resource.user_id == input.user.id
+    kyc_tiers[input.user.kyc_tier] >= 1
+    within_commodities_limit
+    commodity_category_allowed
+    not is_blocked_user
+    user_country_allowed_for_commodities
+}
+
+# Check if commodity trade is within KYC tier limits
+within_commodities_limit if {
+    tier := input.user.kyc_tier
+    limits := commodities_limits[tier]
+    input.resource.amount <= limits.single
+    input.context.daily_commodities_total + input.resource.amount <= limits.daily
+}
+
+# Default to true if no amount specified (for read operations)
+within_commodities_limit if {
+    not input.resource.amount
+}
+
+# Check if commodity category is allowed for user's KYC tier
+commodity_category_allowed if {
+    tier := input.user.kyc_tier
+    allowed := allowed_commodity_categories[tier]
+    input.resource.category in allowed
+}
+
+# Default to true if no category specified
+commodity_category_allowed if {
+    not input.resource.category
+}
+
+# Countries allowed for commodities trading
+commodities_allowed_countries := [
+    "NG", "KE", "ZA", "GH", "TZ", "UG", "RW", "ET", "EG", "MA",
+    "SN", "CI", "CM", "AO", "MZ", "ZM", "ZW", "BW", "NA", "MW"
+]
+
+# Check if user's country allows commodities trading
+user_country_allowed_for_commodities if {
+    input.user.country in commodities_allowed_countries
+}
+
+# Default to true if no country specified
+user_country_allowed_for_commodities if {
+    not input.user.country
+}
+
+# Users can create price alerts
+allow if {
+    input.action == "create"
+    input.resource.type == "commodity_alert"
+    input.resource.user_id == input.user.id
+    kyc_tiers[input.user.kyc_tier] >= 1
+}
+
+# Users can delete their own price alerts
+allow if {
+    input.action == "delete"
+    input.resource.type == "commodity_alert"
+    input.resource.user_id == input.user.id
+}
+
+# Users can view their commodity orders
+allow if {
+    input.action == "read"
+    input.resource.type == "commodity_order"
+    input.resource.user_id == input.user.id
+}
+
+# Users can cancel their own pending orders
+allow if {
+    input.action == "cancel"
+    input.resource.type == "commodity_order"
+    input.resource.user_id == input.user.id
+    input.resource.status == "pending"
+}
+
+# AgriDex specific policies - African agricultural exchange
+allow if {
+    input.action in ["read", "buy", "sell"]
+    input.resource.type == "agridex_commodity"
+    input.resource.user_id == input.user.id
+    kyc_tiers[input.user.kyc_tier] >= 1
+    input.user.country in commodities_allowed_countries
+    not is_blocked_user
+}
+
+# Compliance officers can view all commodity trades
+allow if {
+    input.action == "read"
+    input.resource.type in ["commodity", "commodity_order", "commodity_portfolio"]
+    "compliance_officer" in effective_roles
+}
+
+# Compliance officers can freeze suspicious commodity trades
+allow if {
+    input.action == "freeze"
+    input.resource.type == "commodity_order"
+    "compliance_officer" in effective_roles
+}
+
+# ============================================
 # ADMIN POLICIES
 # ============================================
 

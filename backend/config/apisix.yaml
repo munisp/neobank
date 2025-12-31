@@ -13,6 +13,24 @@ apisix:
     - name: mojaloop_als
       nodes:
         "mojaloop-account-lookup-service:4002": 1
+    - name: commodities_trading
+      nodes:
+        "commodities-trading:8095": 1
+      type: roundrobin
+      timeout:
+        connect: 5
+        send: 30
+        read: 30
+      checks:
+        active:
+          type: http
+          http_path: /health
+          healthy:
+            interval: 5
+            successes: 2
+          unhealthy:
+            interval: 5
+            http_failures: 3
 
   # Routes configuration
   routes:
@@ -176,6 +194,251 @@ apisix:
         opa:
           host: "http://opa:8181"
           policy: "neobank/mojaloop"
+
+    # ==================== Commodities Trading Routes ====================
+    
+    # Commodities Market Data - Public quotes with caching
+    - uri: /api/v1/commodities
+      upstream_id: commodities_trading
+      plugins:
+        # OpenID Connect authentication via Keycloak
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          introspection_endpoint_auth_method: "client_secret_post"
+          set_userinfo_header: true
+          access_token_in_authorization_header: true
+        # Rate limiting for market data
+        limit-req:
+          rate: 200
+          burst: 100
+          key: "remote_addr"
+        # Caching for market data (30 seconds)
+        proxy-cache:
+          cache_key:
+            - "$uri"
+            - "$arg_category"
+          cache_ttl: 30
+        # Request tracing
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+        opentelemetry:
+          sampler:
+            name: "always_on"
+
+    # Commodities by Category
+    - uri: /api/v1/commodities/category/*
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        limit-req:
+          rate: 200
+          burst: 100
+          key: "remote_addr"
+        proxy-cache:
+          cache_key:
+            - "$uri"
+          cache_ttl: 30
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # Single Commodity Details
+    - uri: /api/v1/commodities/*
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        limit-req:
+          rate: 200
+          burst: 100
+          key: "remote_addr"
+        proxy-cache:
+          cache_key:
+            - "$uri"
+          cache_ttl: 30
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # Commodities Orders - Requires authentication and OPA authorization
+    - uri: /api/v1/orders
+      methods: ["POST"]
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        # OPA policy for trading authorization
+        opa:
+          host: "http://opa:8181"
+          policy: "neobank/commodities/trade"
+        # Stricter rate limiting for orders
+        limit-req:
+          rate: 20
+          burst: 10
+          key: "consumer_name"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+        opentelemetry:
+          sampler:
+            name: "always_on"
+
+    # Get User Orders
+    - uri: /api/v1/orders
+      methods: ["GET"]
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "consumer_name"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # Cancel Order
+    - uri: /api/v1/orders/*/cancel
+      methods: ["POST"]
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        opa:
+          host: "http://opa:8181"
+          policy: "neobank/commodities/cancel_order"
+        limit-req:
+          rate: 20
+          burst: 10
+          key: "consumer_name"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # User Portfolio
+    - uri: /api/v1/portfolio
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "consumer_name"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+        opentelemetry:
+          sampler:
+            name: "always_on"
+
+    # Price Alerts
+    - uri: /api/v1/alerts
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        limit-req:
+          rate: 50
+          burst: 25
+          key: "consumer_name"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+
+    # Delete Alert
+    - uri: /api/v1/alerts/*
+      methods: ["DELETE"]
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        limit-req:
+          rate: 50
+          burst: 25
+          key: "consumer_name"
+
+    # AgriDex African Agricultural Exchange
+    - uri: /api/v1/agridex/*
+      upstream_id: commodities_trading
+      plugins:
+        openid-connect:
+          client_id: "neobank-commodities"
+          client_secret: "${KEYCLOAK_COMMODITIES_SECRET}"
+          discovery: "${KEYCLOAK_URL}/realms/neobank/.well-known/openid-configuration"
+          bearer_only: true
+          realm: "neobank"
+          set_userinfo_header: true
+        # OPA policy for AgriDex trading
+        opa:
+          host: "http://opa:8181"
+          policy: "neobank/commodities/agridex"
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "consumer_name"
+        request-id:
+          header_name: "X-Request-ID"
+          include_in_response: true
+        opentelemetry:
+          sampler:
+            name: "always_on"
+
+    # Commodities Health Check (no auth required)
+    - uri: /api/v1/commodities/health
+      upstream_id: commodities_trading
+      plugins:
+        limit-req:
+          rate: 100
+          burst: 50
+          key: "remote_addr"
 
     # ==================== Connectivity Service Routes ====================
     

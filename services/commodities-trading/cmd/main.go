@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/neobank/commodities-trading/internal/handlers"
+	"github.com/neobank/commodities-trading/internal/middleware"
 )
 
 func main() {
@@ -34,10 +35,11 @@ func main() {
 	// Health check
 	r.GET("/health", h.HealthCheck)
 
-	// API routes
+	// API routes with Keycloak authentication
 	api := r.Group("/api/v1")
+	api.Use(middleware.KeycloakAuth())
 	{
-		// Commodities
+		// Commodities (public market data - auth still required but read-only)
 		commodities := api.Group("/commodities")
 		{
 			commodities.GET("", h.GetAllCommodities)
@@ -46,24 +48,24 @@ func main() {
 			commodities.GET("/:symbol/history", h.GetHistoricalData)
 		}
 
-		// Orders
+		// Orders (requires authentication)
 		orders := api.Group("/orders")
 		{
 			orders.POST("", h.CreateOrder)
 			orders.GET("", h.GetOrders)
 		}
 
-		// Portfolio
+		// Portfolio (requires authentication)
 		api.GET("/portfolio", h.GetPortfolio)
 
-		// Price Alerts
+		// Price Alerts (requires authentication)
 		alerts := api.Group("/alerts")
 		{
 			alerts.POST("", h.CreatePriceAlert)
 			alerts.GET("", h.GetPriceAlerts)
 		}
 
-		// AgriDex (blockchain trading)
+		// AgriDex (blockchain trading - requires authentication)
 		agridex := api.Group("/agridex")
 		{
 			agridex.GET("/listings", h.GetAgriDexListings)

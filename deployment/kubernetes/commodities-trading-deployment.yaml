@@ -1,0 +1,294 @@
+# NeoBank Commodities Trading Service - Kubernetes Deployment
+# Production-Ready Configuration with Keycloak, APISIX, and OpenAppSec Integration
+# Version: 1.0.0
+
+---
+# Commodities Trading Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: commodities-trading
+  namespace: neobank-production
+  labels:
+    app: commodities-trading
+    tier: backend
+    version: v1.0.0
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: commodities-trading
+  template:
+    metadata:
+      labels:
+        app: commodities-trading
+        tier: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8095"
+        prometheus.io/path: "/metrics"
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "commodities-trading"
+        dapr.io/app-port: "8095"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: commodities-trading
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: commodities-trading
+        image: neobank/commodities-trading:v1.0.0
+        ports:
+        - containerPort: 8095
+          name: http
+        env:
+        - name: PORT
+          value: "8095"
+        - name: GIN_MODE
+          value: "release"
+        - name: AUTH_MODE
+          value: "production"
+        - name: KEYCLOAK_URL
+          value: "http://keycloak.keycloak.svc.cluster.local:8080"
+        - name: KEYCLOAK_REALM
+          value: "neobank"
+        - name: KEYCLOAK_CLIENT_ID
+          value: "neobank-commodities"
+        - name: KAFKA_BROKERS
+          value: "kafka-headless.kafka.svc.cluster.local:9092"
+        - name: KAFKA_ENABLED
+          value: "true"
+        - name: REDIS_HOST
+          value: "redis-master.redis.svc.cluster.local"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: POSTGRES_HOST
+          value: "postgresql-primary.database.svc.cluster.local"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          value: "neobank_commodities"
+        - name: TWELVE_DATA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: commodities-secrets
+              key: twelve-data-api-key
+        - name: AFEX_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: commodities-secrets
+              key: afex-api-key
+        - name: AGRIDEX_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: commodities-secrets
+              key: agridex-api-key
+        envFrom:
+        - secretRef:
+            name: backend-api-secrets
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8095
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8095
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      serviceAccountName: commodities-trading
+
+---
+# Commodities Trading Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: commodities-trading
+  namespace: neobank-production
+  labels:
+    app: commodities-trading
+spec:
+  selector:
+    app: commodities-trading
+  ports:
+  - port: 8095
+    targetPort: 8095
+    name: http
+  type: ClusterIP
+
+---
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: commodities-trading-hpa
+  namespace: neobank-production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: commodities-trading
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: commodities-trading-pdb
+  namespace: neobank-production
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: commodities-trading
+
+---
+# Service Account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: commodities-trading
+  namespace: neobank-production
+  labels:
+    app: commodities-trading
+
+---
+# Network Policy - Allow traffic from APISIX and internal services only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: commodities-trading-network-policy
+  namespace: neobank-production
+spec:
+  podSelector:
+    matchLabels:
+      app: commodities-trading
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: apisix
+    - namespaceSelector:
+        matchLabels:
+          name: neobank-production
+    ports:
+    - protocol: TCP
+      port: 8095
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: keycloak
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# Secrets for Commodities Trading Service
+apiVersion: v1
+kind: Secret
+metadata:
+  name: commodities-secrets
+  namespace: neobank-production
+type: Opaque
+stringData:
+  twelve-data-api-key: "${TWELVE_DATA_API_KEY}"
+  afex-api-key: "${AFEX_API_KEY}"
+  agridex-api-key: "${AGRIDEX_API_KEY}"
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: commodities-trading-monitor
+  namespace: neobank-production
+  labels:
+    app: commodities-trading
+spec:
+  selector:
+    matchLabels:
+      app: commodities-trading
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s

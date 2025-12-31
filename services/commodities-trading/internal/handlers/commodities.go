@@ -137,9 +137,11 @@ type CreateOrderRequest struct {
 
 // CreateOrder creates a new commodity order
 func (h *CommoditiesHandler) CreateOrder(c *gin.Context) {
-	userID := c.GetHeader("X-User-ID")
-	if userID == "" {
-		userID = "demo_user"
+	userID, _ := c.Get("user_id")
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User authentication required"})
+		return
 	}
 
 	var req CreateOrderRequest
@@ -180,7 +182,7 @@ func (h *CommoditiesHandler) CreateOrder(c *gin.Context) {
 
 	order := &models.CommodityOrder{
 		ID:            orderID,
-		UserID:        userID,
+		UserID:        userIDStr,
 		Symbol:        req.Symbol,
 		OrderType:     req.OrderType,
 		Side:          req.Side,
@@ -203,7 +205,7 @@ func (h *CommoditiesHandler) CreateOrder(c *gin.Context) {
 	h.mu.Unlock()
 
 	// Publish event
-	h.producer.PublishOrderCreated(userID, orderID, req.Symbol, req.Side, req.Quantity, price.InexactFloat64())
+	h.producer.PublishOrderCreated(userIDStr, orderID, req.Symbol, req.Side, req.Quantity, price.InexactFloat64())
 
 	// Simulate immediate fill for market orders
 	if req.OrderType == "market" {
@@ -270,9 +272,11 @@ func (h *CommoditiesHandler) updatePosition(order *models.CommodityOrder) {
 
 // GetOrders returns user's orders
 func (h *CommoditiesHandler) GetOrders(c *gin.Context) {
-	userID := c.GetHeader("X-User-ID")
-	if userID == "" {
-		userID = "demo_user"
+	userID, _ := c.Get("user_id")
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User authentication required"})
+		return
 	}
 
 	status := c.Query("status")
@@ -282,7 +286,7 @@ func (h *CommoditiesHandler) GetOrders(c *gin.Context) {
 
 	var userOrders []*models.CommodityOrder
 	for _, order := range h.orders {
-		if order.UserID == userID {
+		if order.UserID == userIDStr {
 			if status == "" || order.Status == status {
 				userOrders = append(userOrders, order)
 			}
@@ -297,13 +301,15 @@ func (h *CommoditiesHandler) GetOrders(c *gin.Context) {
 
 // GetPortfolio returns user's commodity portfolio
 func (h *CommoditiesHandler) GetPortfolio(c *gin.Context) {
-	userID := c.GetHeader("X-User-ID")
-	if userID == "" {
-		userID = "demo_user"
+	userID, _ := c.Get("user_id")
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User authentication required"})
+		return
 	}
 
 	h.mu.RLock()
-	positions := h.positions[userID]
+	positions := h.positions[userIDStr]
 	h.mu.RUnlock()
 
 	// Calculate current values and P&L
@@ -342,7 +348,7 @@ func (h *CommoditiesHandler) GetPortfolio(c *gin.Context) {
 	}
 
 	portfolio := models.CommodityPortfolio{
-		UserID:      userID,
+		UserID:      userIDStr,
 		TotalValue:  totalValue,
 		TotalCost:   totalCost,
 		TotalPnL:    totalValue.Sub(totalCost),
@@ -366,9 +372,11 @@ type CreatePriceAlertRequest struct {
 
 // CreatePriceAlert creates a new price alert
 func (h *CommoditiesHandler) CreatePriceAlert(c *gin.Context) {
-	userID := c.GetHeader("X-User-ID")
-	if userID == "" {
-		userID = "demo_user"
+	userID, _ := c.Get("user_id")
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User authentication required"})
+		return
 	}
 
 	var req CreatePriceAlertRequest
@@ -379,7 +387,7 @@ func (h *CommoditiesHandler) CreatePriceAlert(c *gin.Context) {
 
 	alert := models.PriceAlert{
 		ID:        uuid.New().String(),
-		UserID:    userID,
+		UserID:    userIDStr,
 		Symbol:    req.Symbol,
 		Condition: req.Condition,
 		Price:     decimal.NewFromFloat(req.Price),
@@ -389,7 +397,7 @@ func (h *CommoditiesHandler) CreatePriceAlert(c *gin.Context) {
 	}
 
 	h.mu.Lock()
-	h.alerts[userID] = append(h.alerts[userID], alert)
+	h.alerts[userIDStr] = append(h.alerts[userIDStr], alert)
 	h.mu.Unlock()
 
 	c.JSON(http.StatusCreated, alert)
@@ -397,13 +405,15 @@ func (h *CommoditiesHandler) CreatePriceAlert(c *gin.Context) {
 
 // GetPriceAlerts returns user's price alerts
 func (h *CommoditiesHandler) GetPriceAlerts(c *gin.Context) {
-	userID := c.GetHeader("X-User-ID")
-	if userID == "" {
-		userID = "demo_user"
+	userID, _ := c.Get("user_id")
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User authentication required"})
+		return
 	}
 
 	h.mu.RLock()
-	alerts := h.alerts[userID]
+	alerts := h.alerts[userIDStr]
 	h.mu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -438,9 +448,11 @@ type ExecuteAgriDexTradeRequest struct {
 
 // ExecuteAgriDexTrade executes a blockchain-settled trade
 func (h *CommoditiesHandler) ExecuteAgriDexTrade(c *gin.Context) {
-	userID := c.GetHeader("X-User-ID")
-	if userID == "" {
-		userID = "demo_user"
+	userID, _ := c.Get("user_id")
+	userIDStr, ok := userID.(string)
+	if !ok || userIDStr == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User authentication required"})
+		return
 	}
 
 	var req ExecuteAgriDexTradeRequest
@@ -456,7 +468,7 @@ func (h *CommoditiesHandler) ExecuteAgriDexTrade(c *gin.Context) {
 	}
 
 	// Publish settlement event
-	h.producer.PublishTradeSettled(userID, req.ListingID, settlement.TransactionHash, req.Quantity)
+	h.producer.PublishTradeSettled(userIDStr, req.ListingID, settlement.TransactionHash, req.Quantity)
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "settled",
