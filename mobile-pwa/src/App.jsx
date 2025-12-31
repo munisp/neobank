@@ -750,6 +750,164 @@ function App() {
         </div>
       )
     },
+    commodities: {
+      title: 'Commodities',
+      icon: '🛢️',
+      content: (
+        <div className="space-y-4">
+          <div className="bg-gradient-to-r from-amber-500 to-orange-600 text-white p-4 rounded-xl">
+            <p className="text-sm opacity-80">Commodities Portfolio</p>
+            <h2 className="text-2xl font-bold">{'\u20A6'}1,850,000</h2>
+            <p className="text-sm mt-1">+8.5% this month</p>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              { name: 'Metals', icon: '🥇', color: 'bg-yellow-100' },
+              { name: 'Energy', icon: '🛢️', color: 'bg-gray-100' },
+              { name: 'Agri', icon: '🌾', color: 'bg-green-100' },
+              { name: 'African', icon: '🌍', color: 'bg-blue-100' },
+            ].map((cat, i) => (
+              <button key={i} className={`${cat.color} p-3 rounded-xl flex flex-col items-center hover:opacity-80`}>
+                <span className="text-xl">{cat.icon}</span>
+                <span className="text-xs font-medium mt-1">{cat.name}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <h4 className="font-semibold mb-3">Precious Metals</h4>
+            <div className="space-y-2">
+              {[
+                { symbol: 'XAU/USD', name: 'Gold', price: '$2,024.50', change: '+1.2%', unit: '/oz' },
+                { symbol: 'XAG/USD', name: 'Silver', price: '$23.45', change: '+0.8%', unit: '/oz' },
+                { symbol: 'XPT/USD', name: 'Platinum', price: '$1,003.20', change: '-0.3%', unit: '/oz' },
+              ].map((metal, i) => (
+                <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                  <div>
+                    <p className="font-medium">{metal.name}</p>
+                    <p className="text-xs text-gray-500">{metal.symbol}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">{metal.price}<span className="text-xs text-gray-500">{metal.unit}</span></p>
+                    <p className={metal.change.startsWith('+') ? 'text-green-500 text-xs' : 'text-red-500 text-xs'}>{metal.change}</p>
+                  </div>
+                  <button className="bg-amber-500 text-white px-3 py-1 rounded-lg text-sm">Buy</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <h4 className="font-semibold mb-3">Energy</h4>
+            <div className="space-y-2">
+              {[
+                { symbol: 'CL', name: 'Crude Oil WTI', price: '$78.45', change: '+2.1%', unit: '/bbl' },
+                { symbol: 'BZ', name: 'Brent Crude', price: '$82.30', change: '+1.8%', unit: '/bbl' },
+                { symbol: 'NG', name: 'Natural Gas', price: '$2.85', change: '-1.2%', unit: '/MMBtu' },
+              ].map((energy, i) => (
+                <div key={i} className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                  <div>
+                    <p className="font-medium">{energy.name}</p>
+                    <p className="text-xs text-gray-500">{energy.symbol}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">{energy.price}<span className="text-xs text-gray-500">{energy.unit}</span></p>
+                    <p className={energy.change.startsWith('+') ? 'text-green-500 text-xs' : 'text-red-500 text-xs'}>{energy.change}</p>
+                  </div>
+                  <button className="bg-gray-700 text-white px-3 py-1 rounded-lg text-sm">Buy</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <div className="flex justify-between items-center mb-3">
+              <h4 className="font-semibold">African Commodities (AFEX)</h4>
+              <span className="text-xs bg-green-100 text-green-600 px-2 py-1 rounded">Live</span>
+            </div>
+            <div className="space-y-2">
+              {[
+                { symbol: 'AFEX:MAIZE', name: 'Maize (Yellow)', price: '₦285,000', change: '+0.9%', unit: '/MT' },
+                { symbol: 'AFEX:SOYBEAN', name: 'Soybeans', price: '₦450,000', change: '+1.1%', unit: '/MT' },
+                { symbol: 'AFEX:COCOA', name: 'Cocoa Beans', price: '₦1,250,000', change: '+2.0%', unit: '/MT' },
+                { symbol: 'AFEX:SESAME', name: 'Sesame Seeds', price: '₦850,000', change: '+1.4%', unit: '/MT' },
+              ].map((comm, i) => (
+                <div key={i} className="flex justify-between items-center p-2 bg-green-50 rounded-lg">
+                  <div>
+                    <p className="font-medium">{comm.name}</p>
+                    <p className="text-xs text-gray-500">{comm.symbol}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">{comm.price}<span className="text-xs text-gray-500">{comm.unit}</span></p>
+                    <p className={comm.change.startsWith('+') ? 'text-green-500 text-xs' : 'text-red-500 text-xs'}>{comm.change}</p>
+                  </div>
+                  <button className="bg-green-600 text-white px-3 py-1 rounded-lg text-sm">Buy</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <div className="flex justify-between items-center mb-3">
+              <h4 className="font-semibold">AgriDex (Blockchain)</h4>
+              <span className="text-xs bg-purple-100 text-purple-600 px-2 py-1 rounded">USDC Settlement</span>
+            </div>
+            <p className="text-xs text-gray-500 mb-2">Instant settlement via Solana blockchain</p>
+            <div className="space-y-2">
+              {[
+                { symbol: 'AGDX:COFFEE_ETH', name: 'Ethiopian Coffee', price: '$4,850', change: '+1.6%', unit: '/MT' },
+                { symbol: 'AGDX:COCOA_GH', name: 'Ghanaian Cocoa', price: '$3,450', change: '+2.5%', unit: '/MT' },
+                { symbol: 'AGDX:VANILLA_MG', name: 'Madagascar Vanilla', price: '$425', change: '-3.4%', unit: '/kg' },
+              ].map((comm, i) => (
+                <div key={i} className="flex justify-between items-center p-2 bg-purple-50 rounded-lg">
+                  <div>
+                    <p className="font-medium">{comm.name}</p>
+                    <p className="text-xs text-gray-500">{comm.symbol}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">{comm.price}<span className="text-xs text-gray-500">{comm.unit}</span></p>
+                    <p className={comm.change.startsWith('+') ? 'text-green-500 text-xs' : 'text-red-500 text-xs'}>{comm.change}</p>
+                  </div>
+                  <button className="bg-purple-600 text-white px-3 py-1 rounded-lg text-sm">Buy</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg shadow">
+            <h4 className="font-semibold mb-2">Your Holdings</h4>
+            <div className="space-y-2">
+              {[
+                { name: 'Gold', qty: '2.5 oz', value: '₦7,850,000', pnl: '+₦285,000', pnlPerc: '+3.8%' },
+                { name: 'Cocoa (AFEX)', qty: '5 MT', value: '₦6,250,000', pnl: '+₦450,000', pnlPerc: '+7.8%' },
+              ].map((holding, i) => (
+                <div key={i} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                  <div>
+                    <p className="font-medium">{holding.name}</p>
+                    <p className="text-xs text-gray-500">{holding.qty}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold">{holding.value}</p>
+                    <p className="text-green-500 text-xs">{holding.pnl} ({holding.pnlPerc})</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-amber-50 p-4 rounded-lg">
+            <h4 className="font-semibold">Why Trade Commodities?</h4>
+            <div className="mt-2 space-y-1 text-sm text-gray-600">
+              <p>• Hedge against inflation with gold and silver</p>
+              <p>• Diversify with African agricultural exports</p>
+              <p>• Instant blockchain settlement with AgriDex</p>
+              <p>• Trade Nigerian commodities on AFEX</p>
+            </div>
+          </div>
+        </div>
+      )
+    },
     }
 
   const tabs = Object.keys(features)
@@ -804,7 +962,7 @@ function App() {
           <button
             onClick={() => setShowMoreMenu(true)}
             className={`flex flex-col items-center p-2 min-w-[56px] transition-colors ${
-              ['rewards', 'insurance', 'accounts', 'kyc', 'escrow'].includes(activeTab) ? 'text-blue-500' : darkMode ? 'text-gray-400' : 'text-gray-500'
+              ['rewards', 'insurance', 'accounts', 'kyc', 'escrow', 'commodities'].includes(activeTab) ? 'text-blue-500' : darkMode ? 'text-gray-400' : 'text-gray-500'
             }`}
           >
             <span className="text-xl">☰</span>
@@ -1247,8 +1405,8 @@ function App() {
               <h3 className="text-xl font-bold">More Services</h3>
               <button onClick={() => setShowMoreMenu(false)} className="text-gray-500 text-2xl">&times;</button>
             </div>
-            <div className="grid grid-cols-4 gap-4">
-              {['rewards', 'insurance', 'accounts', 'kyc', 'escrow'].map((tab) => (
+            <div className="grid grid-cols-3 gap-4">
+              {['rewards', 'insurance', 'accounts', 'kyc', 'escrow', 'commodities'].map((tab) => (
                 <button
                   key={tab}
                   onClick={() => { setActiveTab(tab); setShowMoreMenu(false); }}
