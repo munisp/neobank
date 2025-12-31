@@ -12,29 +12,30 @@ metadata:
     environment: production
 
 ---
-# MinIO Object Storage StatefulSet (S3-compatible storage for Iceberg)
+# RustFS Object Storage StatefulSet (S3-compatible storage for Iceberg)
+# RustFS is 2.3x faster than MinIO for small objects, Apache 2.0 licensed
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: minio
+  name: rustfs
   namespace: lakehouse
   labels:
-    app: minio
+    app: rustfs
 spec:
-  serviceName: minio-headless
+  serviceName: rustfs-headless
   replicas: 4
   podManagementPolicy: Parallel
   selector:
     matchLabels:
-      app: minio
+      app: rustfs
   template:
     metadata:
       labels:
-        app: minio
+        app: rustfs
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9000"
-        prometheus.io/path: "/minio/v2/metrics/cluster"
+        prometheus.io/path: "/metrics"
     spec:
       affinity:
         podAntiAffinity:
@@ -44,34 +45,72 @@ spec:
                   - key: app
                     operator: In
                     values:
-                      - minio
+                      - rustfs
               topologyKey: kubernetes.io/hostname
+      securityContext:
+        fsGroup: 10001
+        runAsUser: 10001
+        runAsGroup: 10001
+      initContainers:
+        - name: init-permissions
+          image: busybox:latest
+          command:
+            - sh
+            - -c
+            - |
+              for i in 0 1 2 3; do
+                mkdir -p /data/rustfs$i
+              done
+              mkdir -p /logs
+              chown -R 10001:10001 /data /logs
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: data-rustfs-0
+              mountPath: /data/rustfs0
+            - name: data-rustfs-1
+              mountPath: /data/rustfs1
+            - name: data-rustfs-2
+              mountPath: /data/rustfs2
+            - name: data-rustfs-3
+              mountPath: /data/rustfs3
+            - name: logs
+              mountPath: /logs
       containers:
-        - name: minio
-          image: minio/minio:RELEASE.2024-01-01T16-36-33Z
-          args:
-            - server
-            - http://minio-{0...3}.minio-headless.lakehouse.svc.cluster.local/data
-            - --console-address
-            - ":9001"
+        - name: rustfs
+          image: rustfs/rustfs:latest
+          command: ["/usr/bin/rustfs"]
           ports:
             - containerPort: 9000
               name: api
             - containerPort: 9001
               name: console
           env:
-            - name: MINIO_ROOT_USER
+            - name: RUSTFS_VOLUMES
+              value: "http://rustfs-{0...3}.rustfs-headless.lakehouse.svc.cluster.local:9000/data/rustfs{0...3}"
+            - name: RUSTFS_ADDRESS
+              value: "0.0.0.0:9000"
+            - name: RUSTFS_CONSOLE_ADDRESS
+              value: "0.0.0.0:9001"
+            - name: RUSTFS_CONSOLE_ENABLE
+              value: "true"
+            - name: RUSTFS_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: minio-secrets
-                  key: root-user
-            - name: MINIO_ROOT_PASSWORD
+                  name: rustfs-secrets
+                  key: access-key
+            - name: RUSTFS_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: minio-secrets
-                  key: root-password
-            - name: MINIO_PROMETHEUS_AUTH_TYPE
-              value: public
+                  name: rustfs-secrets
+                  key: secret-key
+            - name: RUSTFS_CORS_ALLOWED_ORIGINS
+              value: "*"
+            - name: RUSTFS_OBS_LOGGER_LEVEL
+              value: "info"
+            - name: RUSTFS_REGION
+              value: "us-east-1"
           resources:
             requests:
               cpu: 500m
@@ -81,52 +120,111 @@ spec:
               memory: 4Gi
           livenessProbe:
             httpGet:
-              path: /minio/health/live
+              path: /health
               port: 9000
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /minio/health/ready
+              path: /health
               port: 9000
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
           volumeMounts:
-            - name: data
-              mountPath: /data
+            - name: data-rustfs-0
+              mountPath: /data/rustfs0
+            - name: data-rustfs-1
+              mountPath: /data/rustfs1
+            - name: data-rustfs-2
+              mountPath: /data/rustfs2
+            - name: data-rustfs-3
+              mountPath: /data/rustfs3
+            - name: logs
+              mountPath: /logs
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
-        name: data
+        name: data-rustfs-0
       spec:
         accessModes:
           - ReadWriteOnce
         storageClassName: fast-ssd
         resources:
           requests:
-            storage: 500Gi
+            storage: 125Gi
+    - metadata:
+        name: data-rustfs-1
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 125Gi
+    - metadata:
+        name: data-rustfs-2
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 125Gi
+    - metadata:
+        name: data-rustfs-3
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 125Gi
+    - metadata:
+        name: logs
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 10Gi
 
 ---
-# MinIO Secrets
+# RustFS Secrets
 apiVersion: v1
 kind: Secret
 metadata:
-  name: minio-secrets
+  name: rustfs-secrets
   namespace: lakehouse
 type: Opaque
 stringData:
-  root-user: CHANGE_ME_MINIO_ROOT_USER
-  root-password: CHANGE_ME_MINIO_ROOT_PASSWORD
+  access-key: CHANGE_ME_RUSTFS_ACCESS_KEY
+  secret-key: CHANGE_ME_RUSTFS_SECRET_KEY
 
 ---
-# MinIO Service
+# RustFS Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: minio
+  name: rustfs
   namespace: lakehouse
 spec:
   selector:
-    app: minio
+    app: rustfs
   ports:
     - port: 9000
       targetPort: 9000
@@ -137,16 +235,16 @@ spec:
   type: ClusterIP
 
 ---
-# MinIO Headless Service
+# RustFS Headless Service
 apiVersion: v1
 kind: Service
 metadata:
-  name: minio-headless
+  name: rustfs-headless
   namespace: lakehouse
 spec:
   clusterIP: None
   selector:
-    app: minio
+    app: rustfs
   ports:
     - port: 9000
       targetPort: 9000
@@ -185,15 +283,15 @@ data:
       </property>
       <property>
         <name>fs.s3a.endpoint</name>
-        <value>http://minio.lakehouse:9000</value>
+        <value>http://rustfs.lakehouse:9000</value>
       </property>
       <property>
         <name>fs.s3a.access.key</name>
-        <value>CHANGE_ME_MINIO_ROOT_USER</value>
+        <value>CHANGE_ME_RUSTFS_ACCESS_KEY</value>
       </property>
       <property>
         <name>fs.s3a.secret.key</name>
-        <value>CHANGE_ME_MINIO_ROOT_PASSWORD</value>
+        <value>CHANGE_ME_RUSTFS_SECRET_KEY</value>
       </property>
       <property>
         <name>fs.s3a.path.style.access</name>
@@ -332,10 +430,10 @@ data:
     connector.name=iceberg
     hive.metastore.uri=thrift://hive-metastore:9083
     iceberg.catalog.type=hive_metastore
-    hive.s3.endpoint=http://minio.lakehouse:9000
+    hive.s3.endpoint=http://rustfs.lakehouse:9000
     hive.s3.path-style-access=true
-    hive.s3.aws-access-key=CHANGE_ME_MINIO_ROOT_USER
-    hive.s3.aws-secret-key=CHANGE_ME_MINIO_ROOT_PASSWORD
+    hive.s3.aws-access-key=CHANGE_ME_RUSTFS_ACCESS_KEY
+    hive.s3.aws-secret-key=CHANGE_ME_RUSTFS_SECRET_KEY
 
 ---
 # Trino Worker ConfigMap
@@ -373,10 +471,10 @@ data:
     connector.name=iceberg
     hive.metastore.uri=thrift://hive-metastore:9083
     iceberg.catalog.type=hive_metastore
-    hive.s3.endpoint=http://minio.lakehouse:9000
+    hive.s3.endpoint=http://rustfs.lakehouse:9000
     hive.s3.path-style-access=true
-    hive.s3.aws-access-key=CHANGE_ME_MINIO_ROOT_USER
-    hive.s3.aws-secret-key=CHANGE_ME_MINIO_ROOT_PASSWORD
+    hive.s3.aws-access-key=CHANGE_ME_RUSTFS_ACCESS_KEY
+    hive.s3.aws-secret-key=CHANGE_ME_RUSTFS_SECRET_KEY
 
 ---
 # Trino Coordinator Deployment
@@ -581,17 +679,17 @@ spec:
       name: http
 
 ---
-# PodDisruptionBudget for MinIO
+# PodDisruptionBudget for RustFS
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: minio-pdb
+  name: rustfs-pdb
   namespace: lakehouse
 spec:
   minAvailable: 3
   selector:
     matchLabels:
-      app: minio
+      app: rustfs
 
 ---
 # PodDisruptionBudget for Trino Workers
