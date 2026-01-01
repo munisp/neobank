@@ -1,0 +1,379 @@
+# OpenLane Core - Audit Log Integration
+# Connects OpenLane to NeoBank's Kafka audit streams for evidence collection
+# Version: 1.0.0
+
+---
+# Kafka Topics for Compliance Evidence
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openlane-kafka-topics
+  namespace: compliance
+data:
+  topics.yaml: |
+    topics:
+      # Audit events from all services
+      - name: neobank.audit.events
+        partitions: 12
+        replication_factor: 3
+        config:
+          retention.ms: 31536000000  # 1 year retention for compliance
+          cleanup.policy: delete
+          
+      # Security events (auth, access control)
+      - name: neobank.security.events
+        partitions: 6
+        replication_factor: 3
+        config:
+          retention.ms: 31536000000
+          cleanup.policy: delete
+          
+      # Access logs (API calls, data access)
+      - name: neobank.access.logs
+        partitions: 12
+        replication_factor: 3
+        config:
+          retention.ms: 31536000000
+          cleanup.policy: delete
+          
+      # Change data capture events
+      - name: neobank.cdc.events
+        partitions: 12
+        replication_factor: 3
+        config:
+          retention.ms: 31536000000
+          cleanup.policy: delete
+          
+      # Compliance-specific events
+      - name: neobank.compliance.events
+        partitions: 6
+        replication_factor: 3
+        config:
+          retention.ms: 63072000000  # 2 years
+          cleanup.policy: delete
+
+---
+# Kafka Connect Configuration for Audit Log Sink
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openlane-kafka-connect-config
+  namespace: compliance
+data:
+  audit-sink-connector.json: |
+    {
+      "name": "openlane-audit-sink",
+      "config": {
+        "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+        "tasks.max": "3",
+        "topics": "neobank.audit.events,neobank.security.events,neobank.access.logs",
+        "connection.url": "jdbc:postgresql://postgresql-primary.database.svc.cluster.local:5432/openlane",
+        "connection.user": "${POSTGRES_USER}",
+        "connection.password": "${POSTGRES_PASSWORD}",
+        "auto.create": "true",
+        "auto.evolve": "true",
+        "insert.mode": "insert",
+        "table.name.format": "audit_${topic}",
+        "pk.mode": "kafka",
+        "pk.fields": "__connect_topic,__connect_partition,__connect_offset",
+        "transforms": "timestamp,flatten",
+        "transforms.timestamp.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+        "transforms.timestamp.timestamp.field": "ingested_at",
+        "transforms.flatten.type": "org.apache.kafka.connect.transforms.Flatten$Value",
+        "transforms.flatten.delimiter": "_"
+      }
+    }
+
+  # S3/RustFS sink for long-term evidence storage
+  evidence-s3-sink-connector.json: |
+    {
+      "name": "openlane-evidence-s3-sink",
+      "config": {
+        "connector.class": "io.confluent.connect.s3.S3SinkConnector",
+        "tasks.max": "3",
+        "topics": "neobank.audit.events,neobank.security.events,neobank.access.logs,neobank.cdc.events",
+        "s3.bucket.name": "compliance-evidence",
+        "s3.region": "us-east-1",
+        "store.url": "https://rustfs.storage.svc.cluster.local:9000",
+        "format.class": "io.confluent.connect.s3.format.json.JsonFormat",
+        "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
+        "path.format": "'year'=YYYY/'month'=MM/'day'=dd/'hour'=HH",
+        "partition.duration.ms": "3600000",
+        "locale": "en-US",
+        "timezone": "UTC",
+        "timestamp.extractor": "Record",
+        "flush.size": "10000",
+        "rotate.interval.ms": "3600000",
+        "storage.class": "io.confluent.connect.s3.storage.S3Storage",
+        "schema.compatibility": "NONE"
+      }
+    }
+
+---
+# Audit Event Schema for OpenLane Integration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openlane-audit-schema
+  namespace: compliance
+data:
+  audit-event-schema.json: |
+    {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "NeoBank Audit Event",
+      "type": "object",
+      "required": ["event_id", "timestamp", "event_type", "actor", "resource"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for the audit event"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of the event"
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "user.login",
+            "user.logout",
+            "user.created",
+            "user.updated",
+            "user.deleted",
+            "account.created",
+            "account.updated",
+            "account.closed",
+            "transaction.initiated",
+            "transaction.completed",
+            "transaction.failed",
+            "kyc.submitted",
+            "kyc.approved",
+            "kyc.rejected",
+            "permission.granted",
+            "permission.revoked",
+            "data.accessed",
+            "data.exported",
+            "config.changed",
+            "security.alert",
+            "compliance.check"
+          ]
+        },
+        "actor": {
+          "type": "object",
+          "properties": {
+            "user_id": {"type": "string"},
+            "email": {"type": "string"},
+            "ip_address": {"type": "string"},
+            "user_agent": {"type": "string"},
+            "session_id": {"type": "string"},
+            "roles": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "resource": {
+          "type": "object",
+          "properties": {
+            "type": {"type": "string"},
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "attributes": {"type": "object"}
+          }
+        },
+        "action": {
+          "type": "string",
+          "enum": ["create", "read", "update", "delete", "execute", "approve", "reject"]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["success", "failure", "partial"]
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "service": {"type": "string"},
+            "version": {"type": "string"},
+            "environment": {"type": "string"},
+            "trace_id": {"type": "string"},
+            "span_id": {"type": "string"}
+          }
+        },
+        "changes": {
+          "type": "object",
+          "properties": {
+            "before": {"type": "object"},
+            "after": {"type": "object"}
+          }
+        },
+        "compliance": {
+          "type": "object",
+          "properties": {
+            "frameworks": {"type": "array", "items": {"type": "string"}},
+            "controls": {"type": "array", "items": {"type": "string"}},
+            "risk_level": {"type": "string", "enum": ["low", "medium", "high", "critical"]}
+          }
+        }
+      }
+    }
+
+---
+# OpenLane Evidence Collector Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openlane-evidence-collector
+  namespace: compliance
+  labels:
+    app: openlane-evidence-collector
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: openlane-evidence-collector
+  template:
+    metadata:
+      labels:
+        app: openlane-evidence-collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: openlane-core
+      containers:
+      - name: evidence-collector
+        image: ghcr.io/theopenlane/core:latest
+        command: ["openlane", "evidence-collector"]
+        ports:
+        - containerPort: 8080
+          name: metrics
+        env:
+        - name: KAFKA_BROKERS
+          value: "kafka-0.kafka-headless.kafka.svc.cluster.local:9092,kafka-1.kafka-headless.kafka.svc.cluster.local:9092,kafka-2.kafka-headless.kafka.svc.cluster.local:9092"
+        - name: KAFKA_CONSUMER_GROUP
+          value: "openlane-evidence-collector"
+        - name: KAFKA_TOPICS
+          value: "neobank.audit.events,neobank.security.events,neobank.access.logs,neobank.cdc.events"
+        - name: OPENLANE_API_URL
+          value: "http://openlane-core.compliance.svc.cluster.local:17608"
+        - name: DB_HOST
+          value: "postgresql-primary.database.svc.cluster.local"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "openlane"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: db-password
+        - name: S3_ENDPOINT
+          value: "https://rustfs.storage.svc.cluster.local:9000"
+        - name: S3_BUCKET
+          value: "compliance-evidence"
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: s3-access-key
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: s3-secret-key
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+
+---
+# Compliance Report Generator CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openlane-report-generator
+  namespace: compliance
+spec:
+  schedule: "0 6 * * 1"  # Every Monday at 6 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: openlane-core
+          containers:
+          - name: report-generator
+            image: ghcr.io/theopenlane/core:latest
+            command: ["openlane", "generate-reports"]
+            args:
+            - "--frameworks=soc2-type2,iso27001,pci-dss"
+            - "--period=weekly"
+            - "--output=s3://compliance-evidence/reports/"
+            env:
+            - name: OPENLANE_API_URL
+              value: "http://openlane-core.compliance.svc.cluster.local:17608"
+            - name: DB_HOST
+              value: "postgresql-primary.database.svc.cluster.local"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: openlane-secrets
+                  key: db-password
+            - name: S3_ENDPOINT
+              value: "https://rustfs.storage.svc.cluster.local:9000"
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openlane-secrets
+                  key: s3-access-key
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openlane-secrets
+                  key: s3-secret-key
+            - name: SMTP_HOST
+              value: "smtp.neobank.local"
+            - name: NOTIFICATION_EMAILS
+              value: "compliance@neobank.local,security@neobank.local"
+          restartPolicy: OnFailure
+
+---
+# Control Attestation Reminder CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openlane-attestation-reminder
+  namespace: compliance
+spec:
+  schedule: "0 9 1 * *"  # First day of each month at 9 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: openlane-core
+          containers:
+          - name: attestation-reminder
+            image: ghcr.io/theopenlane/core:latest
+            command: ["openlane", "send-attestation-reminders"]
+            env:
+            - name: OPENLANE_API_URL
+              value: "http://openlane-core.compliance.svc.cluster.local:17608"
+            - name: SMTP_HOST
+              value: "smtp.neobank.local"
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: openlane-secrets
+                  key: slack-webhook-url
+          restartPolicy: OnFailure

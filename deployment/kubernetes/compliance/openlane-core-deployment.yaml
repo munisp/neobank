@@ -1,0 +1,496 @@
+# OpenLane Core - Compliance Automation Platform
+# Deployed as a separate GRC/compliance subsystem for NeoBank
+# Integrates with Keycloak for auth, connects to platform audit logs
+# Version: 1.0.0
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: compliance
+  labels:
+    name: compliance
+    app.kubernetes.io/part-of: neobank
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openlane-core
+  namespace: compliance
+
+---
+# OpenLane Core Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openlane-core-config
+  namespace: compliance
+data:
+  config.yaml: |
+    server:
+      host: 0.0.0.0
+      port: 17608
+      debug: false
+      
+    # Database Configuration (PostgreSQL)
+    db:
+      driver: postgres
+      host: postgresql-primary.database.svc.cluster.local
+      port: 5432
+      database: openlane
+      sslmode: require
+      max_open_conns: 25
+      max_idle_conns: 5
+      conn_max_lifetime: 5m
+      
+    # Redis for caching and sessions
+    redis:
+      host: redis-master.redis.svc.cluster.local
+      port: 6379
+      db: 2
+      
+    # Authentication - Keycloak OIDC Integration
+    auth:
+      enabled: true
+      provider: oidc
+      oidc:
+        issuer: https://keycloak.neobank.local/realms/neobank
+        client_id: openlane-compliance
+        redirect_url: https://compliance.neobank.local/auth/callback
+        scopes:
+          - openid
+          - profile
+          - email
+          - roles
+        # Map Keycloak roles to OpenLane roles
+        role_mapping:
+          compliance_admin: admin
+          compliance_manager: manager
+          compliance_analyst: analyst
+          compliance_auditor: auditor
+          
+    # Authorization - Use OpenLane's built-in OpenFGA for compliance-specific permissions
+    # NeoBank's Permify/OPA remains the source of truth for API authorization
+    authz:
+      enabled: true
+      provider: openfga
+      openfga:
+        store_id: neobank-compliance
+        api_url: http://openfga.compliance.svc.cluster.local:8080
+        
+    # Audit Log Integration - Connect to NeoBank's Kafka audit stream
+    audit:
+      enabled: true
+      kafka:
+        brokers:
+          - kafka-0.kafka-headless.kafka.svc.cluster.local:9092
+          - kafka-1.kafka-headless.kafka.svc.cluster.local:9092
+          - kafka-2.kafka-headless.kafka.svc.cluster.local:9092
+        topic: neobank.audit.events
+        consumer_group: openlane-compliance
+        
+    # Evidence Collection Sources
+    evidence:
+      sources:
+        - name: audit-logs
+          type: kafka
+          config:
+            topic: neobank.audit.events
+        - name: security-events
+          type: kafka
+          config:
+            topic: neobank.security.events
+        - name: access-logs
+          type: kafka
+          config:
+            topic: neobank.access.logs
+        - name: change-events
+          type: kafka
+          config:
+            topic: neobank.cdc.events
+            
+    # Compliance Frameworks
+    frameworks:
+      enabled:
+        - soc2-type2
+        - iso27001
+        - pci-dss
+        - gdpr
+        - cbk-guidelines  # Central Bank of Kenya
+        - cbn-guidelines  # Central Bank of Nigeria
+        - sarb-guidelines # South African Reserve Bank
+        
+    # Notifications
+    notifications:
+      email:
+        enabled: true
+        smtp_host: smtp.neobank.local
+        smtp_port: 587
+        from_address: compliance@neobank.local
+      slack:
+        enabled: true
+        webhook_url: ${SLACK_WEBHOOK_URL}
+      
+    # Object Storage for Evidence Documents
+    storage:
+      provider: s3
+      s3:
+        endpoint: https://rustfs.storage.svc.cluster.local:9000
+        bucket: compliance-evidence
+        region: us-east-1
+        force_path_style: true
+
+---
+# OpenLane Core Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openlane-core
+  namespace: compliance
+  labels:
+    app: openlane-core
+    app.kubernetes.io/name: openlane-core
+    app.kubernetes.io/part-of: neobank-compliance
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: openlane-core
+  template:
+    metadata:
+      labels:
+        app: openlane-core
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "17608"
+        prometheus.io/path: "/metrics"
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "openlane-core"
+        dapr.io/app-port: "17608"
+    spec:
+      serviceAccountName: openlane-core
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: openlane-core
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: openlane-core
+        image: ghcr.io/theopenlane/core:latest
+        ports:
+        - containerPort: 17608
+          name: http
+        env:
+        - name: OPENLANE_CONFIG
+          value: /etc/openlane/config.yaml
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: db-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: redis-password
+        - name: OIDC_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: oidc-client-secret
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: slack-webhook-url
+        - name: S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: s3-access-key
+        - name: S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: s3-secret-key
+        volumeMounts:
+        - name: config
+          mountPath: /etc/openlane
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 17608
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 17608
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+      volumes:
+      - name: config
+        configMap:
+          name: openlane-core-config
+
+---
+# OpenLane Core Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: openlane-core
+  namespace: compliance
+  labels:
+    app: openlane-core
+spec:
+  selector:
+    app: openlane-core
+  ports:
+  - port: 17608
+    targetPort: 17608
+    name: http
+  type: ClusterIP
+
+---
+# OpenFGA for OpenLane Authorization (Compliance-specific)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openfga
+  namespace: compliance
+  labels:
+    app: openfga
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: openfga
+  template:
+    metadata:
+      labels:
+        app: openfga
+    spec:
+      containers:
+      - name: openfga
+        image: openfga/openfga:latest
+        args:
+        - run
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8081
+          name: grpc
+        - containerPort: 3000
+          name: playground
+        env:
+        - name: OPENFGA_DATASTORE_ENGINE
+          value: postgres
+        - name: OPENFGA_DATASTORE_URI
+          valueFrom:
+            secretKeyRef:
+              name: openlane-secrets
+              key: openfga-db-uri
+        - name: OPENFGA_LOG_FORMAT
+          value: json
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openfga
+  namespace: compliance
+spec:
+  selector:
+    app: openfga
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  - port: 8081
+    targetPort: 8081
+    name: grpc
+  type: ClusterIP
+
+---
+# HorizontalPodAutoscaler for OpenLane Core
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: openlane-core-hpa
+  namespace: compliance
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: openlane-core
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# PodDisruptionBudget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: openlane-core-pdb
+  namespace: compliance
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: openlane-core
+
+---
+# NetworkPolicy for OpenLane Core
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openlane-core-network-policy
+  namespace: compliance
+spec:
+  podSelector:
+    matchLabels:
+      app: openlane-core
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - namespaceSelector:
+        matchLabels:
+          name: neobank-production
+    ports:
+    - protocol: TCP
+      port: 17608
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: storage
+    ports:
+    - protocol: TCP
+      port: 9000
+  - to:
+    - podSelector:
+        matchLabels:
+          app: openfga
+    ports:
+    - protocol: TCP
+      port: 8080
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: openlane-core-monitor
+  namespace: compliance
+spec:
+  selector:
+    matchLabels:
+      app: openlane-core
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+
+---
+# Ingress for OpenLane Core (Compliance Portal)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openlane-core-ingress
+  namespace: compliance
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+  - hosts:
+    - compliance.neobank.local
+    secretName: openlane-tls
+  rules:
+  - host: compliance.neobank.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openlane-core
+            port:
+              number: 17608

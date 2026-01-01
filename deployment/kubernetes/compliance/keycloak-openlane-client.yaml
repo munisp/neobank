@@ -1,0 +1,215 @@
+# Keycloak Client Configuration for OpenLane Core
+# This configures the OIDC client in Keycloak for OpenLane authentication
+# Apply after Keycloak is running using the Keycloak Admin API or Operator
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-openlane-client-config
+  namespace: compliance
+data:
+  openlane-client.json: |
+    {
+      "clientId": "openlane-compliance",
+      "name": "OpenLane Compliance Portal",
+      "description": "NeoBank Compliance Automation Platform",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "redirectUris": [
+        "https://compliance.neobank.local/*",
+        "https://compliance.neobank.local/auth/callback"
+      ],
+      "webOrigins": [
+        "https://compliance.neobank.local"
+      ],
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": false,
+      "frontchannelLogout": true,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://compliance.neobank.local/*",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "compliance-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "department",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "department",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "department",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "employee-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "employee_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "employee_id",
+            "jsonType.label": "String"
+          }
+        }
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "profile",
+        "roles",
+        "email",
+        "openid"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access"
+      ]
+    }
+
+  # Keycloak roles for compliance team
+  compliance-roles.json: |
+    {
+      "roles": [
+        {
+          "name": "compliance_admin",
+          "description": "Full access to compliance platform - can manage frameworks, controls, and users",
+          "composite": false,
+          "clientRole": false
+        },
+        {
+          "name": "compliance_manager",
+          "description": "Can manage compliance programs, assign tasks, and approve evidence",
+          "composite": false,
+          "clientRole": false
+        },
+        {
+          "name": "compliance_analyst",
+          "description": "Can view and submit evidence, complete assigned tasks",
+          "composite": false,
+          "clientRole": false
+        },
+        {
+          "name": "compliance_auditor",
+          "description": "Read-only access for audit purposes, can view all evidence and reports",
+          "composite": false,
+          "clientRole": false
+        }
+      ]
+    }
+
+---
+# Job to configure Keycloak client
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-openlane-setup
+  namespace: compliance
+spec:
+  template:
+    spec:
+      serviceAccountName: openlane-core
+      containers:
+      - name: keycloak-setup
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          
+          KEYCLOAK_URL="https://keycloak.keycloak.svc.cluster.local:8443"
+          REALM="neobank"
+          
+          # Get admin token
+          echo "Getting admin token..."
+          TOKEN=$(curl -s -k -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "username=${KEYCLOAK_ADMIN}" \
+            -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+            -d "grant_type=password" \
+            -d "client_id=admin-cli" | jq -r '.access_token')
+          
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to get admin token"
+            exit 1
+          fi
+          
+          # Create compliance roles
+          echo "Creating compliance roles..."
+          for role in compliance_admin compliance_manager compliance_analyst compliance_auditor; do
+            curl -s -k -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/roles" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\": \"${role}\"}" || true
+          done
+          
+          # Create OpenLane client
+          echo "Creating OpenLane client..."
+          curl -s -k -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d @/config/openlane-client.json || true
+          
+          # Get client ID
+          CLIENT_UUID=$(curl -s -k "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=openlane-compliance" \
+            -H "Authorization: Bearer ${TOKEN}" | jq -r '.[0].id')
+          
+          if [ -n "$CLIENT_UUID" ] && [ "$CLIENT_UUID" != "null" ]; then
+            # Get client secret
+            SECRET=$(curl -s -k "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${CLIENT_UUID}/client-secret" \
+              -H "Authorization: Bearer ${TOKEN}" | jq -r '.value')
+            
+            echo "OpenLane client created successfully"
+            echo "Client Secret: ${SECRET}"
+          fi
+          
+          echo "Keycloak setup complete"
+        env:
+        - name: KEYCLOAK_ADMIN
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: username
+        - name: KEYCLOAK_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: password
+        volumeMounts:
+        - name: config
+          mountPath: /config
+      volumes:
+      - name: config
+        configMap:
+          name: keycloak-openlane-client-config
+      restartPolicy: OnFailure

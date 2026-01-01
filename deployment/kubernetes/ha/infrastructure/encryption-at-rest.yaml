@@ -1,0 +1,649 @@
+# NeoBank Data Encryption at Rest - Infrastructure Configuration
+# Comprehensive encryption for PostgreSQL, Kafka, RustFS, and Kubernetes Secrets
+# Version: 1.0.0
+
+---
+# Kubernetes Secret Encryption Configuration
+# Apply to kube-apiserver with --encryption-provider-config
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+      - configmaps
+    providers:
+      - aescbc:
+          keys:
+            - name: key1
+              secret: "${KUBERNETES_ENCRYPTION_KEY}"
+      - identity: {}
+
+---
+# StorageClass with Encryption for PostgreSQL PVCs
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: encrypted-ssd
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  encrypted: "true"
+  kmsKeyId: "${AWS_KMS_KEY_ARN}"
+  fsType: ext4
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# StorageClass for GCP with Encryption
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: encrypted-ssd-gcp
+provisioner: pd.csi.storage.gke.io
+parameters:
+  type: pd-ssd
+  disk-encryption-kms-key: "${GCP_KMS_KEY_ID}"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# HashiCorp Vault Deployment for Key Management
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault
+  labels:
+    name: vault
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: vault
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: vault
+data:
+  vault.hcl: |
+    ui = true
+    
+    listener "tcp" {
+      address = "0.0.0.0:8200"
+      tls_disable = false
+      tls_cert_file = "/vault/tls/tls.crt"
+      tls_key_file = "/vault/tls/tls.key"
+    }
+    
+    storage "postgresql" {
+      connection_url = "postgres://vault:${VAULT_DB_PASSWORD}@postgresql-primary.database:5432/vault?sslmode=require"
+      ha_enabled = true
+      ha_table = "vault_ha_locks"
+    }
+    
+    seal "awskms" {
+      region     = "${AWS_REGION}"
+      kms_key_id = "${AWS_KMS_KEY_ARN}"
+    }
+    
+    telemetry {
+      prometheus_retention_time = "30s"
+      disable_hostname = true
+    }
+    
+    api_addr = "https://vault.vault.svc.cluster.local:8200"
+    cluster_addr = "https://vault.vault.svc.cluster.local:8201"
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: vault
+  labels:
+    app: vault
+spec:
+  serviceName: vault-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8200"
+        prometheus.io/path: "/v1/sys/metrics"
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: vault
+            topologyKey: kubernetes.io/hostname
+      serviceAccountName: vault
+      containers:
+      - name: vault
+        image: hashicorp/vault:1.15
+        ports:
+        - containerPort: 8200
+          name: api
+        - containerPort: 8201
+          name: cluster
+        env:
+        - name: VAULT_ADDR
+          value: "https://127.0.0.1:8200"
+        - name: VAULT_API_ADDR
+          value: "https://$(POD_IP):8200"
+        - name: VAULT_CLUSTER_ADDR
+          value: "https://$(POD_IP):8201"
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: VAULT_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vault-secrets
+              key: db-password
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: AWS_KMS_KEY_ARN
+          valueFrom:
+            secretKeyRef:
+              name: vault-secrets
+              key: kms-key-arn
+        volumeMounts:
+        - name: config
+          mountPath: /vault/config
+        - name: tls
+          mountPath: /vault/tls
+        - name: data
+          mountPath: /vault/data
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /v1/sys/health?standbyok=true
+            port: 8200
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /v1/sys/health?standbyok=true
+            port: 8200
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        securityContext:
+          capabilities:
+            add:
+            - IPC_LOCK
+      volumes:
+      - name: config
+        configMap:
+          name: vault-config
+      - name: tls
+        secret:
+          secretName: vault-tls
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: encrypted-ssd
+      resources:
+        requests:
+          storage: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  selector:
+    app: vault
+  ports:
+  - port: 8200
+    targetPort: 8200
+    name: api
+  - port: 8201
+    targetPort: 8201
+    name: cluster
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-headless
+  namespace: vault
+spec:
+  selector:
+    app: vault
+  ports:
+  - port: 8200
+    targetPort: 8200
+    name: api
+  - port: 8201
+    targetPort: 8201
+    name: cluster
+  clusterIP: None
+
+---
+# PostgreSQL Encryption Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-encryption-config
+  namespace: database
+data:
+  postgresql-encryption.conf: |
+    # Transparent Data Encryption (TDE) settings
+    # Note: Requires PostgreSQL Enterprise or pgcrypto extension
+    
+    # Enable SSL for connections
+    ssl = on
+    ssl_cert_file = '/etc/postgresql/tls/tls.crt'
+    ssl_key_file = '/etc/postgresql/tls/tls.key'
+    ssl_ca_file = '/etc/postgresql/tls/ca.crt'
+    ssl_min_protocol_version = 'TLSv1.3'
+    ssl_ciphers = 'HIGH:!aNULL:!MD5'
+    
+    # Require SSL for all connections
+    # hostssl all all 0.0.0.0/0 scram-sha-256
+    
+    # Logging for audit
+    log_statement = 'all'
+    log_connections = on
+    log_disconnections = on
+    
+  init-encryption.sql: |
+    -- Enable pgcrypto extension for field-level encryption
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    
+    -- Create encryption key management schema
+    CREATE SCHEMA IF NOT EXISTS encryption;
+    
+    -- Key metadata table (actual keys stored in Vault)
+    CREATE TABLE IF NOT EXISTS encryption.key_metadata (
+      key_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key_name VARCHAR(255) NOT NULL UNIQUE,
+      key_version INTEGER NOT NULL DEFAULT 1,
+      algorithm VARCHAR(50) NOT NULL DEFAULT 'aes-256-gcm',
+      vault_path VARCHAR(500) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      rotated_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      is_active BOOLEAN NOT NULL DEFAULT true
+    );
+    
+    -- Encrypted column registry for tracking
+    CREATE TABLE IF NOT EXISTS encryption.encrypted_columns (
+      id SERIAL PRIMARY KEY,
+      table_schema VARCHAR(255) NOT NULL,
+      table_name VARCHAR(255) NOT NULL,
+      column_name VARCHAR(255) NOT NULL,
+      key_id UUID REFERENCES encryption.key_metadata(key_id),
+      encryption_type VARCHAR(50) NOT NULL DEFAULT 'envelope',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(table_schema, table_name, column_name)
+    );
+    
+    -- Function to encrypt data using pgcrypto (for fallback)
+    CREATE OR REPLACE FUNCTION encryption.encrypt_data(
+      plaintext TEXT,
+      encryption_key TEXT
+    ) RETURNS BYTEA AS $$
+    BEGIN
+      RETURN pgp_sym_encrypt(plaintext, encryption_key, 'cipher-algo=aes256');
+    END;
+    $$ LANGUAGE plpgsql SECURITY DEFINER;
+    
+    -- Function to decrypt data using pgcrypto (for fallback)
+    CREATE OR REPLACE FUNCTION encryption.decrypt_data(
+      ciphertext BYTEA,
+      encryption_key TEXT
+    ) RETURNS TEXT AS $$
+    BEGIN
+      RETURN pgp_sym_decrypt(ciphertext, encryption_key);
+    END;
+    $$ LANGUAGE plpgsql SECURITY DEFINER;
+    
+    -- Grant permissions
+    GRANT USAGE ON SCHEMA encryption TO neobank_app;
+    GRANT SELECT ON encryption.key_metadata TO neobank_app;
+    GRANT SELECT ON encryption.encrypted_columns TO neobank_app;
+
+---
+# Kafka Encryption Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-encryption-config
+  namespace: kafka
+data:
+  server.properties: |
+    # SSL/TLS Configuration for Kafka
+    listeners=PLAINTEXT://:9092,SSL://:9093
+    advertised.listeners=PLAINTEXT://kafka-headless:9092,SSL://kafka-headless:9093
+    
+    # SSL Configuration
+    ssl.keystore.location=/etc/kafka/secrets/kafka.keystore.jks
+    ssl.keystore.password=${KAFKA_KEYSTORE_PASSWORD}
+    ssl.key.password=${KAFKA_KEY_PASSWORD}
+    ssl.truststore.location=/etc/kafka/secrets/kafka.truststore.jks
+    ssl.truststore.password=${KAFKA_TRUSTSTORE_PASSWORD}
+    ssl.client.auth=required
+    ssl.enabled.protocols=TLSv1.3,TLSv1.2
+    ssl.protocol=TLSv1.3
+    
+    # Inter-broker SSL
+    security.inter.broker.protocol=SSL
+    
+    # Log encryption (requires encrypted storage)
+    # Kafka doesn't natively encrypt at rest - use encrypted volumes
+    log.dirs=/var/lib/kafka/data
+    
+    # Enable compression (reduces data exposure surface)
+    compression.type=lz4
+
+---
+# RustFS/MinIO Server-Side Encryption Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rustfs-encryption-config
+  namespace: storage
+data:
+  config.yaml: |
+    # RustFS Server-Side Encryption Configuration
+    encryption:
+      enabled: true
+      type: sse-kms
+      kms:
+        endpoint: "https://vault.vault.svc.cluster.local:8200"
+        key_id: "neobank-storage-key"
+        auth:
+          type: kubernetes
+          role: rustfs
+      
+      # Default encryption for all buckets
+      default_bucket_encryption:
+        algorithm: AES256
+        kms_key_id: "neobank-storage-key"
+      
+      # Per-bucket encryption policies
+      bucket_policies:
+        - bucket: kyc-documents
+          encryption:
+            algorithm: AES256
+            kms_key_id: "neobank-kyc-key"
+        - bucket: transaction-receipts
+          encryption:
+            algorithm: AES256
+            kms_key_id: "neobank-transactions-key"
+        - bucket: user-avatars
+          encryption:
+            algorithm: AES256
+            kms_key_id: "neobank-storage-key"
+    
+    # TLS Configuration
+    tls:
+      enabled: true
+      cert_file: /etc/rustfs/tls/tls.crt
+      key_file: /etc/rustfs/tls/tls.key
+      min_version: "1.3"
+
+---
+# Vault Policy for NeoBank Encryption Keys
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-policies
+  namespace: vault
+data:
+  neobank-encryption.hcl: |
+    # NeoBank Encryption Key Management Policy
+    
+    # Transit secrets engine for encryption operations
+    path "transit/encrypt/neobank-*" {
+      capabilities = ["update"]
+    }
+    
+    path "transit/decrypt/neobank-*" {
+      capabilities = ["update"]
+    }
+    
+    path "transit/datakey/plaintext/neobank-*" {
+      capabilities = ["update"]
+    }
+    
+    path "transit/rewrap/neobank-*" {
+      capabilities = ["update"]
+    }
+    
+    # Key metadata (read-only for apps)
+    path "transit/keys/neobank-*" {
+      capabilities = ["read"]
+    }
+    
+    # KV secrets for API keys and credentials
+    path "secret/data/neobank/*" {
+      capabilities = ["read"]
+    }
+    
+  neobank-admin.hcl: |
+    # NeoBank Admin Policy for Key Management
+    
+    # Full access to transit engine
+    path "transit/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    
+    # Full access to KV secrets
+    path "secret/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    
+    # Sys operations for key rotation
+    path "sys/policies/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+
+---
+# Vault Transit Engine Setup Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vault-transit-setup
+  namespace: vault
+spec:
+  template:
+    spec:
+      serviceAccountName: vault
+      containers:
+      - name: vault-setup
+        image: hashicorp/vault:1.15
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Wait for Vault to be ready
+          until vault status; do sleep 5; done
+          
+          # Enable transit secrets engine
+          vault secrets enable -path=transit transit || true
+          
+          # Create encryption keys for different data types
+          vault write -f transit/keys/neobank-pii \
+            type=aes256-gcm96 \
+            exportable=false \
+            allow_plaintext_backup=false
+          
+          vault write -f transit/keys/neobank-kyc \
+            type=aes256-gcm96 \
+            exportable=false \
+            allow_plaintext_backup=false
+          
+          vault write -f transit/keys/neobank-transactions \
+            type=aes256-gcm96 \
+            exportable=false \
+            allow_plaintext_backup=false
+          
+          vault write -f transit/keys/neobank-credentials \
+            type=aes256-gcm96 \
+            exportable=false \
+            allow_plaintext_backup=false
+          
+          vault write -f transit/keys/neobank-storage \
+            type=aes256-gcm96 \
+            exportable=false \
+            allow_plaintext_backup=false
+          
+          # Enable key auto-rotation (30 days)
+          vault write transit/keys/neobank-pii/config auto_rotate_period=720h
+          vault write transit/keys/neobank-kyc/config auto_rotate_period=720h
+          vault write transit/keys/neobank-transactions/config auto_rotate_period=720h
+          vault write transit/keys/neobank-credentials/config auto_rotate_period=720h
+          vault write transit/keys/neobank-storage/config auto_rotate_period=720h
+          
+          # Apply policies
+          vault policy write neobank-encryption /vault/policies/neobank-encryption.hcl
+          vault policy write neobank-admin /vault/policies/neobank-admin.hcl
+          
+          # Enable Kubernetes auth
+          vault auth enable kubernetes || true
+          vault write auth/kubernetes/config \
+            kubernetes_host="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT"
+          
+          # Create roles for services
+          vault write auth/kubernetes/role/neobank-backend \
+            bound_service_account_names=neobank-backend \
+            bound_service_account_namespaces=neobank-production \
+            policies=neobank-encryption \
+            ttl=1h
+          
+          vault write auth/kubernetes/role/commodities-trading \
+            bound_service_account_names=commodities-trading \
+            bound_service_account_namespaces=neobank-production \
+            policies=neobank-encryption \
+            ttl=1h
+          
+          vault write auth/kubernetes/role/kyc-kyb-go \
+            bound_service_account_names=kyc-kyb-go \
+            bound_service_account_namespaces=neobank-production \
+            policies=neobank-encryption \
+            ttl=1h
+          
+          vault write auth/kubernetes/role/rustfs \
+            bound_service_account_names=rustfs \
+            bound_service_account_namespaces=storage \
+            policies=neobank-encryption \
+            ttl=1h
+          
+          echo "Vault transit engine setup complete"
+        env:
+        - name: VAULT_ADDR
+          value: "https://vault.vault.svc.cluster.local:8200"
+        - name: VAULT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vault-secrets
+              key: root-token
+        volumeMounts:
+        - name: policies
+          mountPath: /vault/policies
+      volumes:
+      - name: policies
+        configMap:
+          name: vault-policies
+      restartPolicy: OnFailure
+
+---
+# Network Policy for Vault
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault-network-policy
+  namespace: vault
+spec:
+  podSelector:
+    matchLabels:
+      app: vault
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: neobank-production
+    - namespaceSelector:
+        matchLabels:
+          name: storage
+    - namespaceSelector:
+        matchLabels:
+          name: database
+    ports:
+    - protocol: TCP
+      port: 8200
+  - from:
+    - podSelector:
+        matchLabels:
+          app: vault
+    ports:
+    - protocol: TCP
+      port: 8201
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# ServiceMonitor for Vault
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vault-monitor
+  namespace: vault
+spec:
+  selector:
+    matchLabels:
+      app: vault
+  endpoints:
+  - port: api
+    path: /v1/sys/metrics
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
+    interval: 30s
