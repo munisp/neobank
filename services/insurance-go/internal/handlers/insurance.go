@@ -14,12 +14,12 @@ import (
 )
 
 type InsuranceHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewInsuranceHandler(db *database.InMemoryDB, cfg *config.Config) *InsuranceHandler {
+func NewInsuranceHandler(db database.Store, cfg *config.Config) *InsuranceHandler {
 	return &InsuranceHandler{
 		db:        db,
 		cfg:       cfg,

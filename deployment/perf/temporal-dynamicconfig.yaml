@@ -1,0 +1,24 @@
+# Temporal server dynamic config — NeoBank workflow tuning
+# Targets: sagas, reconciliation batches, notification fan-out
+frontend.enableTokenNamespaceEnforcement:
+  - value: true
+history.cacheMaxSize:
+  - value: 8192           # workflow cache entries (default 512 is tiny)
+history.cacheTTL:
+  - value: 3600           # seconds
+matching.rps:
+  - value: 10000          # task dispatch rate
+matching.longPollExpirationInterval:
+  - value: 20s
+frontend.rps:
+  - value: 8000
+frontend.namespaceCount:
+  - value: 100
+limit.blobSize.error:
+  - value: 4194304
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: false          # avoid hot ES reads per workflow
+history.timerProcessorCompleteTimerFailureRetryCount:
+  - value: 10
+worker.stickyCacheSize:
+  - value: 4096           # sticky execution cache per worker

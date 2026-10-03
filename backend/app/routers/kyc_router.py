@@ -216,3 +216,66 @@ async def get_kyc_legacy(id: str, request: Request):
     """Legacy KYC get endpoint"""
     headers = {"Authorization": request.headers.get("Authorization", "")}
     return await proxy_to_go_service("GET", f"/applications/{id}", headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# KYB proxy — same Go service, /api/kyb paths
+# ---------------------------------------------------------------------------
+
+kyb_router = APIRouter(prefix="/kyb", tags=["kyb"])
+
+
+async def proxy_kyb(method: str, path: str, json_data: Optional[Dict] = None,
+                    headers: Optional[Dict] = None) -> Dict[str, Any]:
+    url = f"{GO_KYC_SERVICE_URL}/api/kyb{path}"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if method == "GET":
+                response = await client.get(url, headers=headers)
+            elif method == "POST":
+                response = await client.post(url, json=json_data, headers=headers)
+            elif method == "PUT":
+                response = await client.put(url, json=json_data, headers=headers)
+            else:
+                raise HTTPException(status_code=405, detail="Method not allowed")
+            return response.json()
+    except httpx.RequestError:
+        logger.error("KYB service unavailable", url=url)
+        raise HTTPException(status_code=503, detail="KYB service unavailable")
+
+
+@kyb_router.post("/initiate")
+async def kyb_initiate(data: Dict[str, Any], request: Request):
+    headers = {"Authorization": request.headers.get("Authorization", "")}
+    return await proxy_kyb("POST", "/initiate", json_data=data, headers=headers)
+
+
+@kyb_router.get("/applications/{application_id}")
+async def kyb_get_application(application_id: str, request: Request):
+    headers = {"Authorization": request.headers.get("Authorization", "")}
+    return await proxy_kyb("GET", f"/applications/{application_id}", headers=headers)
+
+
+@kyb_router.get("/applications")
+async def kyb_list_applications(request: Request):
+    headers = {"Authorization": request.headers.get("Authorization", "")}
+    return await proxy_kyb("GET", "/applications", headers=headers)
+
+
+@kyb_router.get("/status/{business_id}")
+async def kyb_status(business_id: str, request: Request):
+    headers = {"Authorization": request.headers.get("Authorization", "")}
+    return await proxy_kyb("GET", f"/status/{business_id}", headers=headers)
+
+
+@kyb_router.post("/applications/{application_id}/ubos")
+async def kyb_add_ubo(application_id: str, data: Dict[str, Any], request: Request):
+    headers = {"Authorization": request.headers.get("Authorization", "")}
+    return await proxy_kyb("POST", f"/applications/{application_id}/ubos",
+                           json_data=data, headers=headers)
+
+
+@kyb_router.post("/applications/{application_id}/submit")
+async def kyb_submit(application_id: str, request: Request):
+    headers = {"Authorization": request.headers.get("Authorization", "")}
+    return await proxy_kyb("POST", f"/applications/{application_id}/submit", headers=headers)

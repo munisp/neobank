@@ -1,337 +1,151 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import AuthService from '../services/AuthService';
-import ApiService from '../services/ApiService';
-import NotificationService from '../services/NotificationService';
+import React, { useState } from 'react';
+import { Wifi, Globe, CreditCard, Snowflake, Sun, Copy, Check, Plus, Eye, EyeOff } from 'lucide-react';
+import { NBCard, NBButton, NBStatusPill, NBSheet } from '../components/ui/nb/index.js';
+import { Amount } from '../components/ui/Amount.jsx';
 
-// Mock UI Components - In a real app, these would be imported from '../components/ui/'
-const Button = ({ children, onClick, className = '', disabled = false }) => (
-  <button onClick={onClick} className={`p-3 rounded-lg font-semibold transition-colors ${className} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={disabled}>
-    {children}
-  </button>
-);
-const Card = ({ children, className = '' }) => <div className={`bg-white shadow-lg rounded-xl p-4 ${className}`}>{children}</div>;
-const Spinner = () => <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>;
-const Alert = ({ type, message }) => (
-  <div className={`p-4 rounded-lg text-sm ${type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-    {message}
-  </div>
-);
-const Modal = ({ isOpen, onClose, title, children }) => {
-  if (!isOpen) return null;
+/**
+ * Cards (Section 7.5): carousel with per-card color identity and frozen
+ * state, instant-apply control toggles, freeze/unfreeze with immediate
+ * status feedback, number reveal behind explicit action, virtual card
+ * creation, clear education about recurring payments.
+ */
+
+const INITIAL_CARDS = [
+  { id: 1, label: 'Debit — Everyday', last4: '4521', color: 1, type: 'physical', frozen: false,
+    controls: { online: true, atm: true, international: false, contactless: true } },
+  { id: 2, label: 'Virtual — Subscriptions', last4: '8890', color: 4, type: 'virtual', frozen: false,
+    controls: { online: true, atm: false, international: true, contactless: false } },
+];
+
+const CONTROL_META = [
+  ['online', 'Online payments', Globe],
+  ['atm', 'ATM withdrawals', CreditCard],
+  ['international', 'International use', Globe],
+  ['contactless', 'Contactless', Wifi],
+];
+
+export default function CardManagement() {
+  const [cards, setCards] = useState(INITIAL_CARDS);
+  const [active, setActive] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [freezeSheet, setFreezeSheet] = useState(false);
+
+  const card = cards[active];
+
+  const patchCard = (patch) => setCards(cards.map((c, i) => (i === active ? { ...c, ...patch } : c)));
+  const toggleControl = (key) => patchCard({ controls: { ...card.controls, [key]: !card.controls[key] } });
+
+  const copyNumber = async () => {
+    try { await navigator.clipboard.writeText(`5399 83•• •••• ${card.last4}`); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+  };
+
   return (
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex justify-center items-center">
-      <div className="relative bg-white rounded-xl shadow-xl w-11/12 md:w-1/3 p-6">
-        <h3 className="text-xl font-bold mb-4">{title}</h3>
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 text-2xl">&times;</button>
-        {children}
-      </div>
-    </div>
-  );
-};
-const OfflineIndicator = () => {
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-  if (isOnline) return null;
-  return (
-    <div className="fixed bottom-0 left-0 right-0 bg-yellow-500 text-white text-center p-2 text-sm z-40">
-      You are currently offline. Some features may be unavailable.
-    </div>
-  );
-};
+    <div className="safe-bottom" style={{ maxWidth: 560, margin: '0 auto', padding: '16px 16px 96px' }}>
+      <h1 style={{ fontSize: 26, fontWeight: 700, margin: '8px 0 16px', color: 'var(--nb-text-primary)' }}>Cards</h1>
 
-// Mock Context for demonstration (assuming a global context for user/app state)
-const AppContext = React.createContext({ isUserLoggedIn: true });
-const useAppContext = () => useContext(AppContext);
-
-
-const CardManagement = () => {
-  const navigate = useNavigate();
-  const { isUserLoggedIn } = useAppContext(); // Example of using context
-
-  // State for data fetching and status
-  const [cards, setCards] = useState([]);
-  const [transactions, setTransactions] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [selectedCard, setSelectedCard] = useState(null);
-
-  // State for UI interactions
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalType, setModalType] = useState(null); // 'freeze', 'new_card', 'details'
-
-  // --- Data Fetching Effect ---
-  useEffect(() => {
-    if (!isUserLoggedIn) {
-      // Redirect to login if not authenticated
-      navigate('/login');
-      return;
-    }
-
-    const fetchCardData = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        // Simulate API calls
-        const cardResponse = await ApiService.get('/cards');
-        const transactionResponse = await ApiService.get('/transactions');
-
-        setCards(cardResponse.data.cards || []);
-        setTransactions(transactionResponse.data.transactions || []);
-      } catch (err) {
-        console.error('Failed to fetch card data:', err);
-        setError('Failed to load card information. Please try again.');
-        NotificationService.error('Error loading data.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchCardData();
-  }, [isUserLoggedIn, navigate]);
-
-  // --- Event Handlers ---
-
-  const handleFreezeUnfreeze = async (cardId, isFrozen) => {
-    // Logic to freeze/unfreeze a card
-    const action = isFrozen ? 'unfreeze' : 'freeze';
-    NotificationService.info(`Attempting to ${action} card...`);
-    try {
-      // Simulate API call
-      await ApiService.post(`/cards/${cardId}/${action}`);
-      
-      // Update local state
-      setCards(prevCards => 
-        prevCards.map(card => 
-          card.id === cardId ? { ...card, isFrozen: !isFrozen } : card
-        )
-      );
-      NotificationService.success(`Card successfully ${action}d.`);
-    } catch (err) {
-      setError(`Failed to ${action} card.`);
-      NotificationService.error(`Failed to ${action} card.`);
-    }
-  };
-
-  const handleRequestNewCard = () => {
-    setModalType('new_card');
-    setIsModalOpen(true);
-  };
-
-  const handleViewDetails = (card) => {
-    setSelectedCard(card);
-    setModalType('details');
-    setIsModalOpen(true);
-  };
-
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setModalType(null);
-    setSelectedCard(null);
-  };
-
-  // --- Render Helpers ---
-
-  const renderCardList = () => {
-    if (isLoading) {
-      return <Spinner />;
-    }
-
-    if (error) {
-      return <Alert type="error" message={error} />;
-    }
-
-    if (cards.length === 0) {
-      return (
-        <div className="text-center p-10 bg-gray-50 rounded-xl">
-          <p className="text-gray-500 mb-4">You don't have any active cards.</p>
-          <Button onClick={handleRequestNewCard} className="bg-blue-500 text-white hover:bg-blue-600">
-            Request New Card
-          </Button>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-4">
-        {cards.map(card => (
-          <Card key={card.id} className={`flex justify-between items-center ${card.isFrozen ? 'border-l-4 border-red-500' : 'border-l-4 border-green-500'}`}>
+      {/* Card carousel */}
+      <div style={{ display: 'flex', gap: 12, overflowX: 'auto', padding: '4px 2px 12px', scrollSnapType: 'x mandatory' }}>
+        {cards.map((c, i) => (
+          <button key={c.id} type="button" onClick={() => { setActive(i); setRevealed(false); }}
+            aria-label={`${c.label} card${c.frozen ? ', frozen' : ''}`} aria-pressed={i === active}
+            className={`acct-color-0${c.color}`}
+            style={{
+              scrollSnapAlign: 'start', minWidth: 300, height: 176, textAlign: 'left', cursor: 'pointer',
+              borderRadius: 'var(--nb-radius-md)', padding: 20, border: i === active ? '2px solid var(--nb-action-primary)' : '2px solid transparent',
+              background: `linear-gradient(135deg, var(--acct), color-mix(in srgb, var(--acct) 60%, #000))`,
+              color: '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+              opacity: c.frozen ? 0.72 : 1, transition: 'opacity var(--nb-dur-standard) var(--nb-ease-emphasized)',
+            }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{c.label}</span>
+              {c.frozen ? <Snowflake size={18} aria-label="Frozen" /> : <Wifi size={18} aria-hidden="true" />}
+            </div>
             <div>
-              <p className="font-bold text-lg">{card.name}</p>
-              <p className="text-sm text-gray-500">**** **** **** {card.last4}</p>
-              <p className={`text-xs font-semibold ${card.isFrozen ? 'text-red-500' : 'text-green-500'}`}>
-                {card.isFrozen ? 'FROZEN' : 'ACTIVE'}
+              <p className="tabular" style={{ margin: 0, fontSize: 18, letterSpacing: 2 }}>
+                {revealed && i === active ? `5399 8304 2210 ${c.last4}` : `•••• •••• •••• ${c.last4}`}
+              </p>
+              <p style={{ margin: '6px 0 0', fontSize: 12, opacity: .85, display: 'flex', gap: 8, alignItems: 'center' }}>
+                {c.type === 'virtual' ? 'Virtual card' : 'Physical card'} · Verve
+                {c.frozen && <NBStatusPill tone="info">Frozen</NBStatusPill>}
               </p>
             </div>
-            <div className="flex space-x-2">
-              <Button 
-                onClick={() => handleFreezeUnfreeze(card.id, card.isFrozen)} 
-                className={`text-white text-sm px-3 py-1 ${card.isFrozen ? 'bg-green-500 hover:bg-green-600' : 'bg-red-500 hover:bg-red-600'}`}
-              >
-                {card.isFrozen ? 'Unfreeze' : 'Freeze'}
-              </Button>
-              <Button 
-                onClick={() => handleViewDetails(card)} 
-                className="bg-gray-200 text-gray-800 hover:bg-gray-300 text-sm px-3 py-1"
-              >
-                Details
-              </Button>
-            </div>
-          </Card>
+          </button>
         ))}
+        <button type="button" aria-label="Create virtual card"
+          style={{ scrollSnapAlign: 'start', minWidth: 120, borderRadius: 'var(--nb-radius-md)', border: '2px dashed var(--nb-border-strong)', background: 'none', color: 'var(--nb-text-secondary)', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
+          <Plus size={22} /> New virtual card
+        </button>
       </div>
-    );
-  };
 
-  const renderModalContent = () => {
-    switch (modalType) {
-      case 'new_card':
-        return (
-          <form onSubmit={(e) => { e.preventDefault(); /* Handle new card request logic */ handleCloseModal(); NotificationService.success('New card request submitted!'); }}>
-            <p className="mb-4">Select the type of card you would like to request.</p>
-            {/* Simple form for new card request */}
-            <select className="w-full p-2 border rounded mb-4">
-              <option>Virtual Debit Card</option>
-              <option>Physical Credit Card</option>
-            </select>
-            <Button type="submit" className="w-full bg-blue-500 text-white hover:bg-blue-600">
-              Submit Request
-            </Button>
-          </form>
-        );
-      case 'details':
-        if (!selectedCard) return null;
-        return (
-          <div className="space-y-3">
-            <p><strong>Card Name:</strong> {selectedCard.name}</p>
-            <p><strong>Card Number:</strong> **** **** **** {selectedCard.last4}</p>
-            <p><strong>Status:</strong> {selectedCard.isFrozen ? 'Frozen' : 'Active'}</p>
-            <p><strong>Expiry:</strong> {selectedCard.expiry}</p>
-            <h4 className="font-bold mt-4">Recent Transactions</h4>
-            {/* Filter transactions for the selected card */}
-            <div className="h-40 overflow-y-auto border p-2 rounded">
-              {transactions.filter(t => t.cardId === selectedCard.id).slice(0, 5).map(t => (
-                <div key={t.id} className="flex justify-between text-sm py-1 border-b">
-                  <span>{t.description}</span>
-                  <span className={t.amount < 0 ? 'text-red-600' : 'text-green-600'}>
-                    {t.amount.toFixed(2)}
-                  </span>
-                </div>
-              ))}
-              {transactions.filter(t => t.cardId === selectedCard.id).length === 0 && (
-                <p className="text-gray-500 text-center py-4">No recent transactions for this card.</p>
-              )}
-            </div>
-            <Button onClick={handleCloseModal} className="w-full bg-gray-200 text-gray-800 hover:bg-gray-300">
-              Close
-            </Button>
+      {/* Primary actions */}
+      <div style={{ display: 'flex', gap: 8, margin: '8px 0 20px' }}>
+        <NBButton variant={card.frozen ? 'primary' : 'secondary'} icon={card.frozen ? Sun : Snowflake}
+          onClick={() => (card.frozen ? patchCard({ frozen: false }) : setFreezeSheet(true))} style={{ flex: 1 }}>
+          {card.frozen ? 'Unfreeze card' : 'Freeze card'}
+        </NBButton>
+        <NBButton variant="secondary" icon={revealed ? EyeOff : Eye} onClick={() => setRevealed(!revealed)} aria-pressed={revealed}>
+          {revealed ? 'Hide' : 'Show'}
+        </NBButton>
+        <NBButton variant="secondary" icon={copied ? Check : Copy} onClick={copyNumber} aria-label="Copy card number">
+          {copied ? 'Copied' : 'Copy'}
+        </NBButton>
+      </div>
+
+      {/* Controls — instant apply */}
+      <NBCard padding={8}>
+        <p style={{ margin: '12px 12px 4px', fontSize: 15, fontWeight: 600, color: 'var(--nb-text-primary)' }}>Card controls</p>
+        <p style={{ margin: '0 12px 8px', fontSize: 13, color: 'var(--nb-text-secondary)' }}>Changes apply instantly.</p>
+        {CONTROL_META.map(([key, label, Icon]) => (
+          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px', borderTop: '1px solid var(--nb-border-subtle)', minHeight: 56 }}>
+            <Icon size={20} color="var(--nb-text-secondary)" aria-hidden="true" />
+            <span style={{ flex: 1, fontSize: 15, color: 'var(--nb-text-primary)' }}>{label}</span>
+            <button
+              role="switch" aria-checked={card.controls[key]} aria-label={label}
+              onClick={() => toggleControl(key)}
+              style={{
+                width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', position: 'relative',
+                background: card.controls[key] ? 'var(--nb-action-primary)' : 'var(--nb-border-strong)',
+                transition: 'background var(--nb-dur-micro) var(--nb-ease-emphasized)',
+              }}>
+              <span style={{
+                position: 'absolute', top: 3, left: card.controls[key] ? 23 : 3, width: 22, height: 22,
+                borderRadius: '50%', background: '#fff',
+                transition: 'left var(--nb-dur-micro) var(--nb-ease-emphasized)',
+              }} />
+            </button>
           </div>
-        );
-      default:
-        return null;
-    }
-  };
+        ))}
+      </NBCard>
 
-  // --- Main Render ---
-  return (
-    <div className="min-h-screen bg-gray-100 p-4 sm:p-6">
-      <OfflineIndicator />
-      <header className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">Card Management</h1>
-        <Button 
-          onClick={handleRequestNewCard} 
-          className="bg-green-500 text-white hover:bg-green-600 text-sm"
-        >
-          + New Card
-        </Button>
-      </header>
+      {/* Education: recurring payments */}
+      <NBCard padding={16} style={{ marginTop: 16, background: 'var(--nb-feedback-info-surface)', border: 'none' }}>
+        <p style={{ margin: 0, fontSize: 13, lineHeight: '19px', color: 'var(--nb-feedback-info)' }}>
+          Freezing stops new payments. Subscriptions you already set up may still try to charge — freezing declines them until you unfreeze.
+        </p>
+      </NBCard>
 
-      <section className="mb-8">
-        <h2 className="text-xl font-semibold mb-4 text-gray-700">Your Cards</h2>
-        {renderCardList()}
-      </section>
+      {/* Spend this month */}
+      <NBCard padding={16} style={{ marginTop: 16 }}>
+        <p style={{ margin: 0, fontSize: 14, color: 'var(--nb-text-secondary)' }}>Spent on this card in October</p>
+        <p style={{ margin: '4px 0 0', fontSize: 24, fontWeight: 700, color: 'var(--nb-text-primary)' }}>
+          <Amount value={-32450} direction="neutral" />
+        </p>
+      </NBCard>
 
-      <section>
-        <h2 className="text-xl font-semibold mb-4 text-gray-700">Card Transactions (All)</h2>
-        {/* Simple list of all transactions - full list would be on a separate page */}
-        <Card>
-          <div className="space-y-2 h-64 overflow-y-auto">
-            {transactions.slice(0, 10).map(t => (
-              <div key={t.id} className="flex justify-between text-sm border-b pb-1">
-                <span className="text-gray-600">{new Date(t.date).toLocaleDateString()} - {t.description}</span>
-                <span className={t.amount < 0 ? 'text-red-600 font-medium' : 'text-green-600 font-medium'}>
-                  {t.amount.toFixed(2)}
-                </span>
-              </div>
-            ))}
-            {transactions.length === 0 && !isLoading && !error && (
-              <p className="text-gray-500 text-center py-4">No transactions found.</p>
-            )}
-          </div>
-        </Card>
-        <div className="mt-4 text-center">
-          <Link to="/transactions" className="text-blue-500 hover:text-blue-700 font-medium text-sm">
-            View All Transactions &rarr;
-          </Link>
+      {/* Freeze confirmation sheet — explicit, reversible */}
+      <NBSheet open={freezeSheet} onClose={() => setFreezeSheet(false)} title="Freeze this card?">
+        <p style={{ color: 'var(--nb-text-secondary)', fontSize: 15, lineHeight: '22px' }}>
+          {card.label} ··{card.last4} will decline all new payments instantly. You can unfreeze anytime — it takes effect immediately.
+        </p>
+        <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+          <NBButton variant="destructive" style={{ flex: 1 }} icon={Snowflake}
+            onClick={() => { patchCard({ frozen: true }); setFreezeSheet(false); }}>
+            Freeze ··{card.last4}
+          </NBButton>
+          <NBButton variant="secondary" onClick={() => setFreezeSheet(false)}>Keep active</NBButton>
         </div>
-      </section>
-
-      <Modal 
-        isOpen={isModalOpen} 
-        onClose={handleCloseModal} 
-        title={modalType === 'new_card' ? 'Request New Card' : 'Card Details'}
-      >
-        {renderModalContent()}
-      </Modal>
+      </NBSheet>
     </div>
   );
-};
-
-// Mock Data for initial state (to be replaced by real API data in useEffect)
-CardManagement.defaultProps = {
-  initialCards: [
-    { id: 'c1', name: 'Primary Debit', last4: '1234', isFrozen: false, expiry: '12/26', balance: 1500.50 },
-    { id: 'c2', name: 'Virtual Shopping', last4: '5678', isFrozen: true, expiry: '08/25', balance: 500.00 },
-  ],
-  initialTransactions: [
-    { id: 't1', cardId: 'c1', description: 'Starbucks', amount: -5.50, date: '2025-11-01' },
-    { id: 't2', cardId: 'c1', description: 'Salary Deposit', amount: 2500.00, date: '2025-10-31' },
-    { id: 't3', cardId: 'c2', description: 'Amazon Purchase', amount: -45.99, date: '2025-10-30' },
-    { id: 't4', cardId: 'c1', description: 'Netflix', amount: -15.99, date: '2025-10-29' },
-    { id: 't5', cardId: 'c2', description: 'Refund', amount: 10.00, date: '2025-10-28' },
-  ]
-};
-
-// Mock ApiService to use defaultProps data for initial testing
-ApiService.get = async (path) => {
-  await new Promise(resolve => setTimeout(resolve, 500)); // Simulate network delay
-  if (path === '/cards') {
-    return { data: { cards: CardManagement.defaultProps.initialCards } };
-  }
-  if (path === '/transactions') {
-    return { data: { transactions: CardManagement.defaultProps.initialTransactions } };
-  }
-  throw new Error('Not Found');
-};
-ApiService.post = async (path) => {
-  await new Promise(resolve => setTimeout(resolve, 300)); // Simulate network delay
-  if (path.startsWith('/cards/')) {
-    return { success: true };
-  }
-  throw new Error('Not Found');
-};
-// Mock NotificationService
-NotificationService.info = (msg) => console.log(`[INFO] ${msg}`);
-NotificationService.error = (msg) => console.error(`[ERROR] ${msg}`);
-NotificationService.success = (msg) => console.log(`[SUCCESS] ${msg}`);
-
-export default CardManagement;
+}

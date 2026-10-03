@@ -14,12 +14,12 @@ import (
 )
 
 type TradingHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewTradingHandler(db *database.InMemoryDB, cfg *config.Config) *TradingHandler {
+func NewTradingHandler(db database.Store, cfg *config.Config) *TradingHandler {
 	return &TradingHandler{
 		db:        db,
 		cfg:       cfg,

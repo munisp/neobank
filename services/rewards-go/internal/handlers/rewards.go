@@ -14,12 +14,12 @@ import (
 )
 
 type RewardsHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewRewardsHandler(db *database.InMemoryDB, cfg *config.Config) *RewardsHandler {
+func NewRewardsHandler(db database.Store, cfg *config.Config) *RewardsHandler {
 	return &RewardsHandler{
 		db:        db,
 		cfg:       cfg,

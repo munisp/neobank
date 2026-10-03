@@ -20,7 +20,7 @@ import (
 
 // KYCHandler handles KYC-related HTTP requests
 type KYCHandler struct {
-	db                     *database.InMemoryDB
+	db                     database.Store
 	cfg                    *config.Config
 	amlService             *compliance.AMLService
 	riskService            *compliance.RiskScoringService
@@ -29,7 +29,7 @@ type KYCHandler struct {
 }
 
 // NewKYCHandler creates a new KYC handler
-func NewKYCHandler(db *database.InMemoryDB, cfg *config.Config) *KYCHandler {
+func NewKYCHandler(db database.Store, cfg *config.Config) *KYCHandler {
 	var amlService *compliance.AMLService
 	if cfg.Compliance.ComplyAdvantageAPIKey != "" {
 		amlService, _ = compliance.NewAMLService(&cfg.Compliance)

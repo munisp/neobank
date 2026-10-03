@@ -50,6 +50,12 @@ const Sidebar = ({ open, onClose, darkMode }) => {
       ]
     },
     {
+      name: 'Apps for You',
+      href: '/store',
+      icon: 'layout-grid',
+      current: location.pathname === '/store'
+    },
+    {
       name: 'Transfers',
       href: '/transfers',
       icon: 'arrow-right-left',

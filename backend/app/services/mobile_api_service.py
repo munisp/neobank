@@ -14,12 +14,12 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database.models import User, Account, Transaction
-from ..database.connection import get_db_session
+from database.models import User, Account, Transaction
+from database.connection import get_db_session
 from ..services.auth_service import get_current_user
 from ..services.fraud_service import fraud_service
 from ..services.enhanced_kyc_service import enhanced_kyc_service
-from ..config.settings import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

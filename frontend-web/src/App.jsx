@@ -10,6 +10,16 @@ import TransactionsPage from './pages/TransactionsPage'
 import TransferPage from './pages/TransferPage'
 import KYCPage from './pages/KYCPage'
 import SettingsPage from './pages/SettingsPage'
+import InvestmentsPage from './pages/InvestmentsPage'
+import TradingPage from './pages/TradingPage'
+import LoansPage from './pages/LoansPage'
+import InsurancePage from './pages/InsurancePage'
+import InsuranceQuotePage from './pages/InsuranceQuotePage'
+import InsuranceClaimsPage from './pages/InsuranceClaimsPage'
+import NotificationsPage from './pages/NotificationsPage'
+import DesignSystemPage from './pages/DesignSystemPage'
+import TenantBrandingPage from './pages/TenantBrandingPage'
+import SegmentsAdminPage from './pages/SegmentsAdminPage'
 import Layout from './components/Layout'
 import './App.css'
 
@@ -61,6 +71,8 @@ function AppRoutes() {
           </PublicRoute>
         } 
       />
+      <Route path="/design-system" element={<DesignSystemPage />} />
+      <Route path="/branding" element={<TenantBrandingPage />} />
       <Route 
         path="/" 
         element={
@@ -76,6 +88,15 @@ function AppRoutes() {
         <Route path="transfer" element={<TransferPage />} />
         <Route path="kyc" element={<KYCPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="investments" element={<InvestmentsPage />} />
+        <Route path="investments/trading" element={<TradingPage />} />
+        <Route path="loans" element={<LoansPage />} />
+        <Route path="insurance" element={<InsurancePage />} />
+        <Route path="insurance/quote" element={<InsuranceQuotePage />} />
+        <Route path="insurance/claims" element={<InsuranceClaimsPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="admin/segments" element={<SegmentsAdminPage />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
   )
@@ -86,7 +107,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <Router>
-          <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div className="min-h-screen" style={{ background: "var(--nb-surface-secondary)" }}>
             <AppRoutes />
             {/* <Toaster /> */}
           </div>

@@ -7,67 +7,45 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
-from datetime import datetime, timedelta
-from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+import hashlib
 import structlog
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
-from app.database import get_db
-from app.models.user import User, UserRole, UserStatus, AuthenticationAttempt, RefreshToken
+from database.connection import get_db
+from database.models import User, UserRole, UserStatus, AuthenticationAttempt, RefreshToken
 from app.middleware.auth import (
     create_access_token,
     create_refresh_token,
     validate_token_for_refresh,
+    verify_token,
     get_current_user,
+    get_current_user_from_credentials,
     require_admin,
     verify_password,
-    hash_password
+    hash_password,
+    acheck_auth_rate_limit,
 )
+from app.services.redis_rate_limiter import auth_rate_limiter
+from config.settings import settings
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 security = HTTPBearer()
 
-# Rate limiting store (use Redis in production for distributed systems)
-rate_limit_store = defaultdict(list)
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now (asyncpg rejects naive datetimes)."""
+    return datetime.now(timezone.utc)
 
 
-def check_auth_rate_limit(request: Request, max_attempts: int = 5, window_minutes: int = 15):
-    """
-    Check authentication rate limit
-    
-    Args:
-        request: FastAPI request object
-        max_attempts: Maximum attempts allowed
-        window_minutes: Time window in minutes
-    
-    Raises:
-        HTTPException: If rate limit exceeded
-    """
-    client_ip = request.client.host
-    current_time = datetime.utcnow()
-    cutoff_time = current_time - timedelta(minutes=window_minutes)
-    
-    # Clean old attempts
-    rate_limit_store[client_ip] = [
-        attempt_time for attempt_time in rate_limit_store[client_ip]
-        if attempt_time > cutoff_time
-    ]
-    
-    # Check limit
-    if len(rate_limit_store[client_ip]) >= max_attempts:
-        logger.warning("Rate limit exceeded", client_ip=client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Too many authentication attempts. Please try again in {window_minutes} minutes."
-        )
-    
-    # Record attempt
-    rate_limit_store[client_ip].append(current_time)
+def _hash_token(token: str) -> str:
+    """SHA-256 hex digest of a refresh token for DB lookup (never store raw)."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 # Request/Response Models
@@ -159,8 +137,6 @@ async def register(
             phone_number=register_data.phone_number,
             roles=[UserRole.USER.value],
             status=UserStatus.PENDING_VERIFICATION.value,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
         )
         
         # Save to database
@@ -206,7 +182,7 @@ async def login(
     Authenticates user credentials against database and returns JWT tokens
     """
     # Check rate limit
-    check_auth_rate_limit(request, max_attempts=5)
+    await acheck_auth_rate_limit(request, max_attempts=5)
     
     # Get client metadata
     ip_address = request.client.host
@@ -227,7 +203,7 @@ async def login(
             success=False,
             ip_address=ip_address,
             user_agent=user_agent,
-            created_at=datetime.utcnow()
+            attempted_at=_utcnow()
         )
         
         # Validate user exists
@@ -243,7 +219,7 @@ async def login(
             )
         
         # Check if account is locked
-        if user.locked_until and user.locked_until > datetime.utcnow():
+        if user.locked_until and user.locked_until > _utcnow():
             attempt.failure_reason = "Account locked"
             db.add(attempt)
             await db.commit()
@@ -273,7 +249,7 @@ async def login(
             
             # Lock account after 5 failed attempts
             if user.failed_login_attempts >= 5:
-                user.locked_until = datetime.utcnow() + timedelta(minutes=30)
+                user.locked_until = _utcnow() + timedelta(minutes=30)
                 logger.warning("Account locked due to failed attempts", email=user.email)
             
             attempt.failure_reason = "Invalid password"
@@ -289,7 +265,7 @@ async def login(
         # Reset failed login attempts on successful login
         user.failed_login_attempts = 0
         user.locked_until = None
-        user.last_login_at = datetime.utcnow()
+        user.last_login_at = _utcnow()
         
         # Create tokens
         access_token = create_access_token(
@@ -306,12 +282,9 @@ async def login(
             id=uuid.uuid4(),
             user_id=user.id,
             token_jti=refresh_token_jti,
-            token_hash=hash_password(refresh_token_value),
-            expires_at=datetime.utcnow() + timedelta(days=30),
-            ip_address=ip_address,
-            user_agent=user_agent,
+            token_hash=_hash_token(refresh_token_value),
+            expires_at=_utcnow() + timedelta(days=30),
             is_revoked=False,
-            created_at=datetime.utcnow()
         )
         db.add(refresh_token_record)
         
@@ -321,7 +294,8 @@ async def login(
         db.add(attempt)
         
         await db.commit()
-        
+        auth_rate_limiter.reset(ip_address)
+
         logger.info("User logged in successfully", user_id=str(user.id), email=user.email)
         
         return LoginResponse(
@@ -361,7 +335,24 @@ async def refresh_token(
     try:
         # Validate refresh token and get user_id
         user_id = validate_token_for_refresh(refresh_data.refresh_token)
-        
+
+        # Verify the refresh token is known, not revoked, and not expired
+        result = await db.execute(
+            select(RefreshToken).where(
+                and_(
+                    RefreshToken.user_id == uuid.UUID(user_id),
+                    RefreshToken.token_hash == _hash_token(refresh_data.refresh_token),
+                )
+            )
+        )
+        token_record = result.scalar_one_or_none()
+        if not token_record or not token_record.is_valid():
+            logger.warning("Refresh token revoked, expired, or unknown", user_id=user_id)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token is no longer valid"
+            )
+
         # Query user from database to verify they still exist and are active
         result = await db.execute(
             select(User).where(User.id == uuid.UUID(user_id))
@@ -384,7 +375,7 @@ async def refresh_token(
             )
         
         # Check if account is locked
-        if user.locked_until and user.locked_until > datetime.utcnow():
+        if user.locked_until and user.locked_until > _utcnow():
             logger.warning("Refresh token for locked account", email=user.email)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -423,7 +414,7 @@ async def logout(
     Revokes all refresh tokens for the user in the database
     """
     try:
-        current_user = await get_current_user(credentials)
+        current_user = await get_current_user_from_credentials(credentials)
         user_id = current_user["user_id"]
         
         # Revoke all refresh tokens for user in database
@@ -439,7 +430,7 @@ async def logout(
         
         for token in refresh_tokens:
             token.is_revoked = True
-            token.revoked_at = datetime.utcnow()
+            token.revoked_at = _utcnow()
         
         await db.commit()
         
@@ -465,7 +456,7 @@ async def get_current_user_info(
     Get current authenticated user information from database
     """
     try:
-        current_user = await get_current_user(credentials)
+        current_user = await get_current_user_from_credentials(credentials)
         user_id = current_user["user_id"]
         
         # Query user from database for latest info
@@ -496,6 +487,22 @@ async def get_current_user_info(
         )
 
 
+@router.get("/profile", status_code=status.HTTP_200_OK)
+async def get_profile(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db)
+):
+    """Full profile for the authenticated user (frontend-web expects this alias)."""
+    current_user = await get_current_user_from_credentials(credentials)
+    result = await db.execute(
+        select(User).where(User.id == uuid.UUID(current_user["user_id"]))
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    return user.to_dict()
+
+
 @router.get("/verify", status_code=status.HTTP_200_OK)
 async def verify_token_endpoint(
     credentials: HTTPAuthorizationCredentials = Depends(security)
@@ -506,7 +513,7 @@ async def verify_token_endpoint(
     Returns 200 if token is valid, 401 if invalid
     """
     try:
-        current_user = await get_current_user(credentials)
+        current_user = await get_current_user_from_credentials(credentials)
         return {
             "valid": True,
             "user_id": current_user["user_id"]
@@ -533,7 +540,8 @@ async def list_users(
     Returns paginated list of users
     """
     try:
-        current_user = await require_admin(credentials)
+        token_payload = await verify_token(credentials)
+        current_user = require_admin(await get_current_user(token_payload))
         
         # Query users from database with pagination
         result = await db.execute(
@@ -587,7 +595,8 @@ async def delete_user(
     Delete user (admin only)
     """
     try:
-        current_user = await require_admin(credentials)
+        token_payload = await verify_token(credentials)
+        current_user = require_admin(await get_current_user(token_payload))
         
         # Query user from database
         result = await db.execute(
@@ -603,7 +612,7 @@ async def delete_user(
         
         # Soft delete - update status
         user.status = UserStatus.DELETED.value
-        user.updated_at = datetime.utcnow()
+        user.updated_at = _utcnow()
         
         await db.commit()
         
@@ -633,3 +642,123 @@ async def auth_health():
         "status": "healthy",
         "service": "authentication"
     }
+
+
+# ---------------------------------------------------------------------------
+# Password management + token validation (PWA AuthService contract)
+# ---------------------------------------------------------------------------
+
+from pydantic import BaseModel as _BM, EmailStr as _EmailStr
+
+
+class _ForgotPasswordRequest(_BM):
+    email: _EmailStr
+
+
+class _ResetPasswordRequest(_BM):
+    token: str
+    new_password: str
+
+
+class _ChangePasswordRequest(_BM):
+    current_password: str
+    new_password: str
+
+
+@router.get("/validate", status_code=status.HTTP_200_OK)
+async def validate_token(credentials: HTTPAuthorizationCredentials = Depends(security),
+                         db: AsyncSession = Depends(get_db)):
+    """Alias of /verify kept for the PWA AuthService.
+
+    Also re-evaluates segment rules on each validation (app start), so
+    auto-enrollment tracks KYC/profile changes. Segmentation failures must
+    never break auth, so evaluation errors are logged and swallowed.
+    """
+    try:
+        current_user = await get_current_user_from_credentials(credentials)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    try:
+        from app.services import segment_service
+        import uuid as _uuid
+        uid = _uuid.UUID(str(current_user["user_id"]))
+        user_row = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user_row is not None:
+            await segment_service.evaluate_and_enroll(db, user_row)
+    except Exception as exc:  # noqa: BLE001 — never fail auth on segmentation
+        logger.warning("segment evaluation failed", error=str(exc))
+
+    return {"valid": True, "user_id": current_user["user_id"]}
+
+
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+async def forgot_password(payload: _ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Issue a short-lived password-reset token.
+
+    Always returns success (never leak whether the email exists). The token
+    is a JWT with type=password_reset, 30-minute expiry. Delivery is via the
+    notification service / SMTP when configured; in development the token is
+    returned in the response for testing.
+    """
+    result = await db.execute(select(User).where(User.email == payload.email))
+    user = result.scalar_one_or_none()
+    if user:
+        token = create_access_token(
+            str(user.id), user.email, user.roles or ["customer"],
+            additional_claims={"type": "password_reset"},
+        )
+        logger.info("password reset requested", email=payload.email)
+        resp = {"success": True, "message": "If the email exists, a reset link has been sent."}
+        if settings.ENVIRONMENT != "production":
+            resp["reset_token"] = token  # development aid only
+        return resp
+    return {"success": True, "message": "If the email exists, a reset link has been sent."}
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def reset_password(payload: _ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Reset password with a token from /forgot-password."""
+    try:
+        import jwt as _jwt
+        from app.middleware.auth import JWT_SECRET, JWT_ALGORITHM
+        token_payload = _jwt.decode(payload.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if token_payload.get("type") != "password_reset":
+            raise ValueError("wrong token type")
+        user_id = token_payload["sub"]
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Invalid or expired reset token")
+
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Password must be at least 8 characters")
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reset token")
+    user.password_hash = hash_password(payload.new_password)
+    user.failed_login_attempts = 0
+    await db.commit()
+    logger.info("password reset completed", user_id=user_id)
+    return {"success": True, "message": "Password updated."}
+
+
+@router.post("/change-password", status_code=status.HTTP_200_OK)
+async def change_password(payload: _ChangePasswordRequest,
+                          credentials: HTTPAuthorizationCredentials = Depends(security),
+                          db: AsyncSession = Depends(get_db)):
+    """Authenticated password change (requires current password)."""
+    current_user = await get_current_user_from_credentials(credentials)
+    result = await db.execute(select(User).where(User.id == uuid.UUID(current_user["user_id"])))
+    user = result.scalar_one_or_none()
+    if not user or not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Current password is incorrect")
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            detail="Password must be at least 8 characters")
+    user.password_hash = hash_password(payload.new_password)
+    await db.commit()
+    logger.info("password changed", user_id=current_user["user_id"])
+    return {"success": True, "message": "Password changed."}

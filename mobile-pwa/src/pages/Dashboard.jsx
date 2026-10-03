@@ -1,489 +1,189 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Send, HandCoins, Plus, Receipt, ArrowDownLeft, ShoppingBag, Coffee, Wifi, GraduationCap } from 'lucide-react';
 import { AuthContext } from '../contexts/AuthContext';
-import { NotificationContext } from '../contexts/NotificationContext';
-import LoadingSpinner from '../components/LoadingSpinner';
+import {
+  NBCard, NBBalanceCard, NBTransactionRow, NBButton,
+  NBSkeletonCard, NBSkeletonTransactionRow, NBOfflineBanner, NBErrorState,
+} from '../components/ui/nb/index.js';
+import { getStoredTenant } from '../design/tenantTheme';
+
+/**
+ * Home dashboard (Section 7.2): greeting, total balance with privacy blur,
+ * account carousel with color coding, quick actions, intelligent insight
+ * strip, recent activity (last 5), offline cached-data banner, pull-down
+ * "as of" timestamp. Skeletons match layout; error state has retry + support.
+ */
+
+const CATEGORY_ICONS = {
+  income: <ArrowDownLeft size={18} />,
+  groceries: <ShoppingBag size={18} />,
+  food: <Coffee size={18} />,
+  data: <Wifi size={18} />,
+  fees: <GraduationCap size={18} />,
+};
+
+const QUICK_ACTIONS = [
+  { label: 'Send', icon: Send, to: '/transfers' },
+  { label: 'Request', icon: HandCoins, to: '/transfers?mode=request' },
+  { label: 'Top up', icon: Plus, to: '/banking' },
+  { label: 'Pay bill', icon: Receipt, to: '/bills' },
+];
 
 const Dashboard = () => {
   const { user } = useContext(AuthContext);
-  const { addNotification } = useContext(NotificationContext);
-  const [loading, setLoading] = useState(true);
-  const [dashboardData, setDashboardData] = useState({
-    accounts: [],
-    recentTransactions: [],
-    insurancePolicies: [],
-    quickStats: {}
-  });
+  const navigate = useNavigate();
+  const [state, setState] = useState('loading'); // loading | ready | error | offline
+  const [updatedAt, setUpdatedAt] = useState(null);
+  const [data, setData] = useState({ accounts: [], recentTransactions: [], insight: null });
+  const tenant = getStoredTenant();
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
+    setState('loading');
     try {
-      // Simulate API calls
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      setDashboardData({
+      await new Promise((r) => setTimeout(r, 700));
+      setData({
         accounts: [
-          {
-            id: 1,
-            name: 'Savings Account',
-            type: 'savings',
-            balance: 2450000,
-            currency: 'NGN',
-            accountNumber: '1234567890'
-          },
-          {
-            id: 2,
-            name: 'Current Account',
-            type: 'current',
-            balance: 850000,
-            currency: 'NGN',
-            accountNumber: '0987654321'
-          },
-          {
-            id: 3,
-            name: 'USD Account',
-            type: 'foreign',
-            balance: 1250,
-            currency: 'USD',
-            accountNumber: '1122334455'
-          }
+          { id: 1, name: 'Everyday', balance: 184500.75, color: 1 },
+          { id: 2, name: 'Savings — School fees', balance: 350000, color: 2 },
+          { id: 3, name: 'Flex (USD)', balance: 210.4, color: 7, currency: '$' },
         ],
         recentTransactions: [
-          {
-            id: 1,
-            type: 'credit',
-            amount: 50000,
-            currency: 'NGN',
-            description: 'Salary Payment',
-            date: new Date(Date.now() - 86400000),
-            status: 'completed'
-          },
-          {
-            id: 2,
-            type: 'debit',
-            amount: 15000,
-            currency: 'NGN',
-            description: 'Insurance Premium - Crop Insurance',
-            date: new Date(Date.now() - 172800000),
-            status: 'completed'
-          },
-          {
-            id: 3,
-            type: 'credit',
-            amount: 25000,
-            currency: 'NGN',
-            description: 'Insurance Payout - Flight Delay',
-            date: new Date(Date.now() - 259200000),
-            status: 'completed'
-          }
+          { id: 1, merchant: 'Allowance — Mum', category: 'Income', time: '09:12', amount: 50000, icon: CATEGORY_ICONS.income },
+          { id: 2, merchant: 'MTN Data 10GB', category: 'Data', time: 'Yesterday', amount: -3500, icon: CATEGORY_ICONS.data },
+          { id: 3, merchant: 'Cafeteria 2', category: 'Food & drink', time: 'Yesterday', amount: -1200, icon: CATEGORY_ICONS.food },
+          { id: 4, merchant: 'Jumia', category: 'Groceries', time: 'Mon', amount: -8750, pending: true, icon: CATEGORY_ICONS.groceries },
+          { id: 5, merchant: 'Departmental dues', category: 'School fees', time: 'Fri', amount: -5000, icon: CATEGORY_ICONS.fees },
         ],
-        insurancePolicies: [
-          {
-            id: 1,
-            type: 'crop',
-            name: 'Cassava Crop Insurance',
-            premium: 15000,
-            coverage: 500000,
-            status: 'active',
-            expiryDate: new Date(Date.now() + 30 * 86400000),
-            claimsCount: 0
-          },
-          {
-            id: 2,
-            type: 'flight',
-            name: 'Flight Delay Insurance',
-            premium: 3500,
-            coverage: 50000,
-            status: 'claimed',
-            expiryDate: new Date(Date.now() - 86400000),
-            claimsCount: 1
-          },
-          {
-            id: 3,
-            type: 'health',
-            name: 'Health Micro Insurance',
-            premium: 18000,
-            coverage: 300000,
-            status: 'active',
-            expiryDate: new Date(Date.now() + 180 * 86400000),
-            claimsCount: 0
-          }
-        ],
-        quickStats: {
-          totalBalance: 3300000,
-          monthlyIncome: 150000,
-          monthlyExpenses: 85000,
-          insuranceCoverage: 850000,
-          activePolicies: 2,
-          pendingClaims: 0
-        }
+        insight: { text: 'Spending on data is 18% lower than last month — you’re on track to save ₦4,200 more.', tone: 'success' },
       });
-    } catch (error) {
-      addNotification({
-        type: 'error',
-        title: 'Error',
-        message: 'Failed to load dashboard data'
-      });
-    } finally {
-      setLoading(false);
+      setUpdatedAt('just now');
+      setState(navigator.onLine === false ? 'offline' : 'ready');
+    } catch {
+      setState('error');
     }
-  };
+  }, []);
 
-  const formatCurrency = (amount, currency = 'NGN') => {
-    if (currency === 'NGN') {
-      return new Intl.NumberFormat('en-NG', {
-        style: 'currency',
-        currency: 'NGN',
-        minimumFractionDigits: 0
-      }).format(amount);
-    }
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: currency,
-      minimumFractionDigits: 0
-    }).format(amount);
-  };
+  useEffect(() => { loadDashboardData(); }, [loadDashboardData]);
 
-  const getInsuranceIcon = (type) => {
-    switch (type) {
-      case 'crop': return 'wheat';
-      case 'flight': return 'plane';
-      case 'health': return 'heart-pulse';
-      default: return 'shield';
-    }
-  };
+  const greeting = tenant.voice?.greeting || 'Hello';
+  const firstName = user?.name?.split(' ')[0] || user?.firstName || 'there';
+  const totalNgn = data.accounts.filter((a) => !a.currency || a.currency === '₦').reduce((s, a) => s + a.balance, 0);
 
-  const getInsuranceColor = (type) => {
-    switch (type) {
-      case 'crop': return 'text-green-600 bg-green-100 dark:bg-green-900/20';
-      case 'flight': return 'text-blue-600 bg-blue-100 dark:bg-blue-900/20';
-      case 'health': return 'text-red-600 bg-red-100 dark:bg-red-900/20';
-      default: return 'text-gray-600 bg-gray-100 dark:bg-gray-900/20';
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <LoadingSpinner size="large" />
-      </div>
-    );
+  if (state === 'error') {
+    return <NBErrorState onRetry={loadDashboardData} onSupport={() => navigate('/settings')} />;
   }
 
   return (
-    <div className="space-y-6">
-      {/* Welcome Header */}
-      <div className="bg-gradient-to-r from-primary-500 to-primary-600 rounded-lg p-6 text-white">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold font-display">
-              Welcome back, {user?.name || 'User'}!
-            </h1>
-            <p className="text-primary-100 mt-1">
-              Your financial overview for {new Date().toLocaleDateString('en-NG', { 
-                weekday: 'long', 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
-              })}
-            </p>
-          </div>
-          <div className="hidden md:block">
-            <div className="h-16 w-16 bg-white/20 rounded-full flex items-center justify-center">
-              <i data-lucide="trending-up" className="h-8 w-8"></i>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div className="safe-bottom" style={{ maxWidth: 720, margin: '0 auto', padding: '16px 16px 96px' }}>
+      {state === 'offline' && <NBOfflineBanner updatedAt={updatedAt} />}
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center">
-            <div className="h-12 w-12 bg-green-100 dark:bg-green-900/20 rounded-lg flex items-center justify-center">
-              <i data-lucide="wallet" className="h-6 w-6 text-green-600"></i>
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Total Balance</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {formatCurrency(dashboardData.quickStats.totalBalance)}
-              </p>
-            </div>
-          </div>
-        </div>
+      {/* Greeting */}
+      <header style={{ margin: '8px 0 20px' }}>
+        <p style={{ margin: 0, fontSize: 14, color: 'var(--nb-text-secondary)' }}>
+          {new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long' })}
+        </p>
+        <h1 style={{ margin: '2px 0 0', fontSize: 28, fontWeight: 700, lineHeight: '34px', color: 'var(--nb-text-primary)' }}>
+          {greeting}, {firstName}
+        </h1>
+      </header>
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center">
-            <div className="h-12 w-12 bg-blue-100 dark:bg-blue-900/20 rounded-lg flex items-center justify-center">
-              <i data-lucide="shield-check" className="h-6 w-6 text-blue-600"></i>
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Insurance Coverage</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {formatCurrency(dashboardData.quickStats.insuranceCoverage)}
-              </p>
-            </div>
-          </div>
-        </div>
+      {state === 'loading' ? (
+        <>
+          <NBSkeletonCard />
+          <div style={{ height: 16 }} />
+          <NBCard padding={8}>
+            <NBSkeletonTransactionRow /><NBSkeletonTransactionRow /><NBSkeletonTransactionRow />
+          </NBCard>
+        </>
+      ) : (
+        <>
+          {/* Total balance hero */}
+          <NBBalanceCard
+            label="Total balance"
+            amount={totalNgn}
+            accountColor={1}
+            updatedAt={updatedAt}
+          />
 
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center">
-            <div className="h-12 w-12 bg-purple-100 dark:bg-purple-900/20 rounded-lg flex items-center justify-center">
-              <i data-lucide="file-text" className="h-6 w-6 text-purple-600"></i>
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Active Policies</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {dashboardData.quickStats.activePolicies}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center">
-            <div className="h-12 w-12 bg-yellow-100 dark:bg-yellow-900/20 rounded-lg flex items-center justify-center">
-              <i data-lucide="clock" className="h-6 w-6 text-yellow-600"></i>
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Pending Claims</p>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {dashboardData.quickStats.pendingClaims}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Accounts Overview */}
-        <div className="lg:col-span-2">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Account Overview
-                </h2>
-                <Link
-                  to="/banking"
-                  className="text-primary-600 dark:text-primary-400 hover:text-primary-500 text-sm font-medium"
-                >
-                  View all
-                </Link>
-              </div>
-            </div>
-            <div className="p-6">
-              <div className="space-y-4">
-                {dashboardData.accounts.map((account) => (
-                  <div
-                    key={account.id}
-                    className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg"
-                  >
-                    <div className="flex items-center">
-                      <div className="h-10 w-10 bg-primary-100 dark:bg-primary-900/20 rounded-lg flex items-center justify-center">
-                        <i data-lucide="building-2" className="h-5 w-5 text-primary-600"></i>
-                      </div>
-                      <div className="ml-4">
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">
-                          {account.name}
-                        </p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {account.accountNumber}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-lg font-semibold text-gray-900 dark:text-white">
-                        {formatCurrency(account.balance, account.currency)}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">
-                        {account.type} account
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="space-y-6">
-          {/* Quick Actions Card */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Quick Actions
-              </h2>
-            </div>
-            <div className="p-6">
-              <div className="grid grid-cols-2 gap-4">
-                <Link
-                  to="/transfers"
-                  className="flex flex-col items-center p-4 bg-primary-50 dark:bg-primary-900/20 rounded-lg hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors"
-                >
-                  <i data-lucide="send" className="h-6 w-6 text-primary-600 mb-2"></i>
-                  <span className="text-sm font-medium text-primary-700 dark:text-primary-300">
-                    Send Money
-                  </span>
-                </Link>
-                
-                <Link
-                  to="/insurance/quote"
-                  className="flex flex-col items-center p-4 bg-green-50 dark:bg-green-900/20 rounded-lg hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
-                >
-                  <i data-lucide="shield-plus" className="h-6 w-6 text-green-600 mb-2"></i>
-                  <span className="text-sm font-medium text-green-700 dark:text-green-300">
-                    Get Insurance
-                  </span>
-                </Link>
-                
-                <Link
-                  to="/cards"
-                  className="flex flex-col items-center p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors"
-                >
-                  <i data-lucide="credit-card" className="h-6 w-6 text-purple-600 mb-2"></i>
-                  <span className="text-sm font-medium text-purple-700 dark:text-purple-300">
-                    Cards
-                  </span>
-                </Link>
-                
-                <Link
-                  to="/investments"
-                  className="flex flex-col items-center p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg hover:bg-yellow-100 dark:hover:bg-yellow-900/30 transition-colors"
-                >
-                  <i data-lucide="trending-up" className="h-6 w-6 text-yellow-600 mb-2"></i>
-                  <span className="text-sm font-medium text-yellow-700 dark:text-yellow-300">
-                    Invest
-                  </span>
-                </Link>
-              </div>
-            </div>
-          </div>
-
-          {/* Insurance Policies Summary */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Insurance Policies
-                </h2>
-                <Link
-                  to="/insurance"
-                  className="text-primary-600 dark:text-primary-400 hover:text-primary-500 text-sm font-medium"
-                >
-                  View all
-                </Link>
-              </div>
-            </div>
-            <div className="p-6">
-              <div className="space-y-3">
-                {dashboardData.insurancePolicies.slice(0, 3).map((policy) => (
-                  <div
-                    key={policy.id}
-                    className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"
-                  >
-                    <div className="flex items-center">
-                      <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${getInsuranceColor(policy.type)}`}>
-                        <i data-lucide={getInsuranceIcon(policy.type)} className="h-4 w-4"></i>
-                      </div>
-                      <div className="ml-3">
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">
-                          {policy.name}
-                        </p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {formatCurrency(policy.coverage)} coverage
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                        policy.status === 'active'
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400'
-                          : policy.status === 'claimed'
-                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400'
-                          : 'bg-gray-100 text-gray-800 dark:bg-gray-900/20 dark:text-gray-400'
-                      }`}>
-                        {policy.status}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Transactions */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-        <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-              Recent Transactions
-            </h2>
-            <Link
-              to="/banking"
-              className="text-primary-600 dark:text-primary-400 hover:text-primary-500 text-sm font-medium"
-            >
-              View all
-            </Link>
-          </div>
-        </div>
-        <div className="p-6">
-          <div className="space-y-4">
-            {dashboardData.recentTransactions.map((transaction) => (
-              <div
-                key={transaction.id}
-                className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg"
+          {/* Account carousel */}
+          <div style={{ display: 'flex', gap: 12, overflowX: 'auto', padding: '16px 2px 8px', scrollSnapType: 'x mandatory' }}>
+            {data.accounts.map((a) => (
+              <Link
+                key={a.id} to="/accounts"
+                style={{ scrollSnapAlign: 'start', minWidth: 220, textDecoration: 'none' }}
+                aria-label={`${a.name} account`}
               >
-                <div className="flex items-center">
-                  <div className={`h-10 w-10 rounded-lg flex items-center justify-center ${
-                    transaction.type === 'credit'
-                      ? 'bg-green-100 dark:bg-green-900/20'
-                      : 'bg-red-100 dark:bg-red-900/20'
-                  }`}>
-                    <i
-                      data-lucide={transaction.type === 'credit' ? 'arrow-down-left' : 'arrow-up-right'}
-                      className={`h-5 w-5 ${
-                        transaction.type === 'credit' ? 'text-green-600' : 'text-red-600'
-                      }`}
-                    ></i>
-                  </div>
-                  <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white">
-                      {transaction.description}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {transaction.date.toLocaleDateString('en-NG')}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className={`text-lg font-semibold ${
-                    transaction.type === 'credit'
-                      ? 'text-green-600'
-                      : 'text-red-600'
-                  }`}>
-                    {transaction.type === 'credit' ? '+' : '-'}
-                    {formatCurrency(transaction.amount, transaction.currency)}
+                <NBCard padding={16} className={`acct-color-0${a.color}`} style={{ borderTop: '3px solid var(--acct)' }}>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: 'var(--nb-text-secondary)' }}>{a.name}</p>
+                  <p className="amount tabular" style={{ margin: '6px 0 0', fontSize: 20, fontWeight: 700, color: 'var(--nb-text-primary)' }}>
+                    <span className="currency-symbol">{a.currency || '₦'}</span>
+                    {a.balance.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
                   </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">
-                    {transaction.status}
-                  </p>
-                </div>
-              </div>
+                </NBCard>
+              </Link>
             ))}
           </div>
-        </div>
-      </div>
+
+          {/* Quick actions — thumb-zone, 44px+ targets */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, margin: '12px 0 20px' }}>
+            {QUICK_ACTIONS.map(({ label, icon: Icon, to }) => (
+              <Link
+                key={label} to={to}
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '12px 4px', textDecoration: 'none', borderRadius: 'var(--nb-radius-sm)' }}
+              >
+                <span style={{ width: 48, height: 48, borderRadius: 'var(--nb-radius-full)', background: 'var(--nb-brand-50)', color: 'var(--nb-brand-700)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon size={20} strokeWidth={2} />
+                </span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--nb-text-primary)' }}>{label}</span>
+              </Link>
+            ))}
+          </div>
+
+          {/* Intelligent insight strip — "am I okay?" before data */}
+          {data.insight && (
+            <NBCard padding={14} style={{ background: 'var(--nb-feedback-success-surface)', border: 'none', marginBottom: 20 }}>
+              <p style={{ margin: 0, fontSize: 14, lineHeight: '20px', color: 'var(--nb-feedback-success)', fontWeight: 600 }}>
+                {data.insight.text}
+              </p>
+            </NBCard>
+          )}
+
+          {/* Recent activity — last 5, tap → detail */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+            <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600, color: 'var(--nb-text-primary)' }}>Recent activity</h2>
+            <Link to="/transactions" style={{ fontSize: 14, fontWeight: 600, color: 'var(--nb-action-primary)', textDecoration: 'none' }}>See all</Link>
+          </div>
+          <NBCard padding={8}>
+            {data.recentTransactions.map((t) => (
+              <NBTransactionRow
+                key={t.id}
+                merchant={t.merchant}
+                category={t.category}
+                time={t.time}
+                amount={t.amount}
+                pending={t.pending}
+                icon={t.icon}
+                onClick={() => navigate('/transactions')}
+              />
+            ))}
+          </NBCard>
+
+          {/* New-customer activation checklist (empty-first-use pattern) */}
+          <NBCard padding={16} style={{ marginTop: 20 }}>
+            <p style={{ margin: '0 0 10px', fontSize: 15, fontWeight: 600, color: 'var(--nb-text-primary)' }}>Get the most out of your account</p>
+            {['Verify your student ID (2 min)', 'Set a savings goal for next term', 'Turn on transaction alerts'].map((step, i) => (
+              <Link key={step} to={i === 0 ? '/onboarding' : i === 1 ? '/budget' : '/settings'}
+                style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 0', textDecoration: 'none', borderTop: i ? '1px solid var(--nb-border-subtle)' : 'none' }}>
+                <span style={{ width: 24, height: 24, borderRadius: 'var(--nb-radius-full)', border: '2px solid var(--nb-brand-500)', color: 'var(--nb-brand-600)', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{i + 1}</span>
+                <span style={{ fontSize: 14, color: 'var(--nb-text-primary)' }}>{step}</span>
+              </Link>
+            ))}
+          </NBCard>
+        </>
+      )}
     </div>
   );
 };
 
 export default Dashboard;
-

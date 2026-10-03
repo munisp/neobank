@@ -14,12 +14,12 @@ import (
 )
 
 type SavingsHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewSavingsHandler(db *database.InMemoryDB, cfg *config.Config) *SavingsHandler {
+func NewSavingsHandler(db database.Store, cfg *config.Config) *SavingsHandler {
 	return &SavingsHandler{
 		db:        db,
 		cfg:       cfg,

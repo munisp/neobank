@@ -25,8 +25,8 @@ import re
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..database.models import User, Account, KYCDocument
-from ..config.settings import settings
+from database.models import User, Account, KYCDocument
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

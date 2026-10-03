@@ -14,7 +14,7 @@ from app.middleware.auth import require_auth, get_current_user
 
 logger = structlog.get_logger()
 
-router = APIRouter(prefix="/api/reconciliation", tags=["reconciliation"])
+router = APIRouter(prefix="/reconciliation", tags=["reconciliation"])
 
 
 # ============================================================================

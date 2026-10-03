@@ -169,24 +169,31 @@ class RateLimiter:
         return TIER_LIMITS.get(tier, TIER_LIMITS[RateLimitTier.FREE])
     
     async def _get_or_create_limiters(self, key: str, config: RateLimitConfig):
+        # Bucket per identity *and* limit profile. Without the config suffix, a
+        # strict endpoint bucket (e.g. register burst=2) is reused for every
+        # later request from the same IP and exhausts unrelated endpoints.
+        cfg_key = (
+            f"{key}:{config.requests_per_minute}:{config.requests_per_hour}:"
+            f"{config.requests_per_day}:{config.burst_limit}"
+        )
         async with self._lock:
-            if key not in self.minute_limiters:
-                self.minute_limiters[key] = SlidingWindowCounter(60, config.requests_per_minute)
-            if key not in self.hour_limiters:
-                self.hour_limiters[key] = SlidingWindowCounter(3600, config.requests_per_hour)
-            if key not in self.day_limiters:
-                self.day_limiters[key] = SlidingWindowCounter(86400, config.requests_per_day)
-            if key not in self.burst_buckets:
-                self.burst_buckets[key] = TokenBucket(
+            if cfg_key not in self.minute_limiters:
+                self.minute_limiters[cfg_key] = SlidingWindowCounter(60, config.requests_per_minute)
+            if cfg_key not in self.hour_limiters:
+                self.hour_limiters[cfg_key] = SlidingWindowCounter(3600, config.requests_per_hour)
+            if cfg_key not in self.day_limiters:
+                self.day_limiters[cfg_key] = SlidingWindowCounter(86400, config.requests_per_day)
+            if cfg_key not in self.burst_buckets:
+                self.burst_buckets[cfg_key] = TokenBucket(
                     capacity=config.burst_limit,
                     refill_rate=config.requests_per_minute / 60
                 )
         
         return (
-            self.minute_limiters[key],
-            self.hour_limiters[key],
-            self.day_limiters[key],
-            self.burst_buckets[key]
+            self.minute_limiters[cfg_key],
+            self.hour_limiters[cfg_key],
+            self.day_limiters[cfg_key],
+            self.burst_buckets[cfg_key]
         )
     
     async def check_rate_limit(

@@ -18,12 +18,12 @@ import (
 
 // CardHandler handles card-related HTTP requests
 type CardHandler struct {
-	db  *database.InMemoryDB
+	db  database.Store
 	cfg *config.Config
 }
 
 // NewCardHandler creates a new card handler
-func NewCardHandler(db *database.InMemoryDB, cfg *config.Config) *CardHandler {
+func NewCardHandler(db database.Store, cfg *config.Config) *CardHandler {
 	return &CardHandler{db: db, cfg: cfg}
 }
 

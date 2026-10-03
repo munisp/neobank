@@ -14,12 +14,12 @@ import (
 )
 
 type BillsHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewBillsHandler(db *database.InMemoryDB, cfg *config.Config) *BillsHandler {
+func NewBillsHandler(db database.Store, cfg *config.Config) *BillsHandler {
 	return &BillsHandler{
 		db:        db,
 		cfg:       cfg,

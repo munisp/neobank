@@ -1,7 +1,6 @@
 // TradingPage.tsx
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import Head from 'next/head';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -619,10 +618,6 @@ const TradingPage = () => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
-      <Head>
-        <title>Active Trader - NeoBank</title>
-      </Head>
-
       <header className="mb-8">
         <h1 className="text-3xl font-extrabold text-white">Active Trader Dashboard</h1>
         <p className="text-gray-400">Real-time trading and market analysis.</p>

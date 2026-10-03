@@ -20,7 +20,7 @@ import (
 
 // KYBHandler handles KYB-related HTTP requests
 type KYBHandler struct {
-	db          *database.InMemoryDB
+	db          database.Store
 	cfg         *config.Config
 	amlService  *compliance.AMLService
 	cacService  *compliance.CACService
@@ -28,7 +28,7 @@ type KYBHandler struct {
 }
 
 // NewKYBHandler creates a new KYB handler
-func NewKYBHandler(db *database.InMemoryDB, cfg *config.Config) *KYBHandler {
+func NewKYBHandler(db database.Store, cfg *config.Config) *KYBHandler {
 	var amlService *compliance.AMLService
 	var cacService *compliance.CACService
 

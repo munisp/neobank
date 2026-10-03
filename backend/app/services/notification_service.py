@@ -18,9 +18,9 @@ from email.mime.base import MimeBase
 from email import encoders
 import jinja2
 
-from ..database.models import User, Notification
-from ..database.connection import get_db_session
-from ..config.settings import settings
+from database.models import User, Notification
+from database.connection import get_db_session
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

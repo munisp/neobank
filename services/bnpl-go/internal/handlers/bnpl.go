@@ -14,12 +14,12 @@ import (
 )
 
 type BNPLHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewBNPLHandler(db *database.InMemoryDB, cfg *config.Config) *BNPLHandler {
+func NewBNPLHandler(db database.Store, cfg *config.Config) *BNPLHandler {
 	return &BNPLHandler{
 		db:        db,
 		cfg:       cfg,

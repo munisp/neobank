@@ -698,3 +698,63 @@ export class ApiService {
 }
 
 export default ApiService;
+
+// ---------------------------------------------------------------------------
+// Module-level namespace API
+// Pages use `import * as ApiService from '../services/ApiService'`; these
+// named exports make the static class members reachable on the namespace.
+// ---------------------------------------------------------------------------
+const _Api = ApiService;
+
+export const get = _Api.get.bind(_Api);
+export const post = _Api.post.bind(_Api);
+export const put = _Api.put.bind(_Api);
+const _delete = _Api.delete.bind(_Api);
+export { _delete as delete };
+
+export const getPortfolio = _Api.getPortfolio.bind(_Api);
+export const getCommodities = _Api.getCommodities.bind(_Api);
+export const getExchanges = _Api.getExchanges.bind(_Api);
+export const buyCrypto = _Api.buyCrypto.bind(_Api);
+export const sellCrypto = _Api.sellCrypto.bind(_Api);
+
+export function fetchProfile() {
+  return _Api.get('/auth/profile');
+}
+
+export function updateProfile(profileData) {
+  return AuthService.updateProfile(profileData);
+}
+
+export function fetchTransactions(params = {}) {
+  return _Api.get('/transactions', params);
+}
+
+export function fetchCreditScore() {
+  return _Api.getCreditScore();
+}
+
+export function fetchCryptoList() {
+  return _Api.getCryptocurrencies();
+}
+
+export async function fetchMarketTrends() {
+  try {
+    return await _Api.get('/investments/market-trends');
+  } catch {
+    return { trends: [] };
+  }
+}
+
+export function getErrorMessage(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  return (
+    error.response?.data?.detail ||
+    error.response?.data?.message ||
+    error.data?.detail ||
+    error.data?.message ||
+    error.message ||
+    ''
+  );
+}

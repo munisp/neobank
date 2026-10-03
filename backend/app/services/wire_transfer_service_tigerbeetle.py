@@ -12,7 +12,8 @@ import re
 import structlog
 
 # TigerBeetle client
-from tigerbeetle import Client, Transfer, Account, TransferFlags, AccountFlags
+from app.infrastructure.tigerbeetle_client import Client
+from tigerbeetle import Transfer, Account, TransferFlags, AccountFlags
 
 logger = structlog.get_logger(__name__)
 

@@ -61,10 +61,12 @@ const NotificationsScreen: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      // Mocking API call to fetch notifications
-      // const data = await NotificationService.getNotifications(user.id);
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate network delay
-      setNotifications(mockNotifications.sort((a, b) => b.timestamp - a.timestamp));
+      const data = await NotificationService.getAllNotifications();
+      setNotifications(data.map(n => ({
+        ...n,
+        read: n.is_read,
+        timestamp: new Date(n.created_at).getTime(),
+      })));
     } catch (err) {
       setError('Failed to load notifications. Please try again.');
       console.error(err);
@@ -81,7 +83,7 @@ const NotificationsScreen: React.FC = () => {
 
   const handleMarkAsRead = useCallback(async (id: string) => {
     try {
-      // await NotificationService.markAsRead(id);
+      await NotificationService.markAsRead(id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
     } catch (err) {
       setError('Failed to mark notification as read.');
@@ -90,7 +92,7 @@ const NotificationsScreen: React.FC = () => {
 
   const handleMarkAllAsRead = useCallback(async () => {
     try {
-      // await NotificationService.markAllAsRead();
+      await NotificationService.markAllAsRead();
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     } catch (err) {
       setError('Failed to mark all notifications as read.');
@@ -99,7 +101,7 @@ const NotificationsScreen: React.FC = () => {
 
   const handleDelete = useCallback(async (id: string) => {
     try {
-      // await NotificationService.deleteNotification(id);
+      await NotificationService.deleteNotification(id);
       setNotifications(prev => prev.filter(n => n.id !== id));
     } catch (err) {
       setError('Failed to delete notification.');

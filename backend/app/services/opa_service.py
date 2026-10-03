@@ -7,7 +7,7 @@ import aiohttp
 import logging
 from typing import Dict, Any, Optional
 
-from ..config.settings import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

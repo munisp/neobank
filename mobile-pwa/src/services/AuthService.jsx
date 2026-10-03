@@ -444,3 +444,36 @@ export class AuthService {
 }
 
 export default AuthService;
+
+// ---------------------------------------------------------------------------
+// Module-level namespace API
+// Pages use `import * as AuthService from '../services/AuthService'`; these
+// named exports make the static class members reachable on the namespace.
+// ---------------------------------------------------------------------------
+const _Auth = AuthService;
+
+export const login = _Auth.login.bind(_Auth);
+export const logout = _Auth.logout.bind(_Auth);
+export const register = _Auth.register.bind(_Auth);
+export const getCurrentUser = _Auth.getCurrentUser.bind(_Auth);
+export const getUser = _Auth.getCurrentUser.bind(_Auth);
+export const getToken = _Auth.getToken.bind(_Auth);
+export const isAuthenticated = _Auth.isAuthenticated.bind(_Auth);
+export const updateProfile = _Auth.updateProfile.bind(_Auth);
+export const changePassword = _Auth.changePassword.bind(_Auth);
+export const forgotPassword = _Auth.requestPasswordReset.bind(_Auth);
+export const resetPassword = _Auth.resetPassword.bind(_Auth);
+export const biometricLogin = _Auth.authenticateWithBiometric.bind(_Auth);
+
+export function getAuthStatus() {
+  return { isAuthenticated: _Auth.isAuthenticated(), user: _Auth.getCurrentUser() };
+}
+
+export async function checkBiometricAvailability() {
+  try {
+    if (!window.PublicKeyCredential) return false;
+    return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+  } catch {
+    return false;
+  }
+}

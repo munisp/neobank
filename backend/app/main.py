@@ -17,8 +17,8 @@ from starlette.responses import Response
 from config.settings import settings
 from database.connection import init_database, close_database, DatabaseHealthCheck
 from app.middleware.security import SecurityMiddleware
-from app.middleware.rate_limiting import RateLimitMiddleware
-from app.middleware.logging import LoggingMiddleware
+from app.middleware.rate_limiter import RateLimitMiddleware
+from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.auth import AuthenticationMiddleware
 from app.middleware.pbac_middleware import PBACMiddleware
 from app.middleware.connectivity_middleware import (
@@ -26,7 +26,7 @@ from app.middleware.connectivity_middleware import (
     ProgressiveLoadingMiddleware,
     OfflineSyncMiddleware,
 )
-from app.routers import auth, accounts, transactions, kyc, dashboard, fraud
+from app.routers import auth, transactions, dashboard, fraud
 from app.exceptions import setup_exception_handlers
 from app.services.opa_service import initialize_opa_service, close_opa_service, opa_service
 from app.services.monitoring_service import initialize_monitoring, monitoring_service
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     """Application lifespan management"""
     # Startup
     logger.info("Starting NeoBank API", version=settings.APP_VERSION)
-    
+
     try:
         await init_database()
         logger.info("Database initialized successfully")
@@ -70,15 +70,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Failed to initialize services", error=str(e))
         raise
-    
+
     # Check database health
     if not await DatabaseHealthCheck.check_connection():
         logger.error("Database health check failed")
         raise HTTPException(status_code=503, detail="Database unavailable")
-    
+
     logger.info("NeoBank API started successfully")
     yield
-    
+
     # Shutdown
     logger.info("Shutting down NeoBank API")
     await close_database()
@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
 
 def create_application() -> FastAPI:
     """Create and configure FastAPI application"""
-    
+
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
@@ -99,14 +99,14 @@ def create_application() -> FastAPI:
         openapi_url="/openapi.json" if settings.DEBUG else None,
         lifespan=lifespan,
     )
-    
+
     # Security middleware
     if not settings.DEBUG:
         app.add_middleware(
             TrustedHostMiddleware,
-            allowed_hosts=["localhost", "127.0.0.1", "*.neobank.ng"]
+            allowed_hosts=["localhost", "127.0.0.1", "testserver", "*.neobank.ng"]
         )
-    
+
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,
@@ -115,31 +115,40 @@ def create_application() -> FastAPI:
         allow_methods=settings.ALLOWED_METHODS,
         allow_headers=settings.ALLOWED_HEADERS,
     )
-    
+
+    # Compress responses > 1KB (JSON APIs benefit heavily; ~70% smaller payloads)
+    from fastapi.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
     # Custom middleware (order matters - first added is last executed)
     app.add_middleware(LoggingMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(SecurityMiddleware)
-    app.add_middleware(AuthenticationMiddleware)
     # PBAC middleware - enforces policy-based access control using OPA and Permify
-    app.add_middleware(PBACMiddleware, use_opa=True, use_permify=True)
+    app.add_middleware(
+        PBACMiddleware,
+        use_opa=settings.ENVIRONMENT == "production",
+        use_permify=settings.ENVIRONMENT == "production",
+    )
+    # Authentication must run before PBAC so request.state.user is populated.
+    app.add_middleware(AuthenticationMiddleware)
     # Connectivity middleware - adaptive data handling for low-connectivity environments
     app.add_middleware(ConnectivityMiddleware)
     app.add_middleware(ProgressiveLoadingMiddleware)
     app.add_middleware(OfflineSyncMiddleware)
-    
+
     # Exception handlers
     setup_exception_handlers(app)
-    
+
     # Metrics middleware
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
         start_time = time.time()
-        
+
         response = await call_next(request)
-        
+
         duration = time.time() - start_time
-        
+
         # Record metrics
         requests_total = monitoring_service.get_metric("requests_total")
         if requests_total:
@@ -147,19 +156,19 @@ def create_application() -> FastAPI:
                 endpoint=request.url.path,
                 method=request.method
             ).inc()
-            
+
         requests_latency = monitoring_service.get_metric("requests_latency")
         if requests_latency:
             requests_latency.labels(endpoint=request.url.path).observe(duration)
-        
+
         return response
-    
+
     # Health check endpoints
     @app.get("/health")
     async def health_check():
         """Basic health check"""
         return {"status": "healthy", "timestamp": time.time()}
-    
+
     @app.get("/health/detailed")
     async def detailed_health_check():
         """Detailed health check with dependencies"""
@@ -169,42 +178,54 @@ def create_application() -> FastAPI:
             "version": settings.APP_VERSION,
             "environment": settings.ENVIRONMENT,
         }
-        
+
         # Check database
         db_healthy = await DatabaseHealthCheck.check_connection()
         health_status["database"] = {
             "status": "healthy" if db_healthy else "unhealthy",
             "details": await DatabaseHealthCheck.get_connection_info() if db_healthy else None
         }
-        
+
         # Check OPA
         opa_healthy = await opa_service.evaluate_policy("system/health", {}) is not None
         health_status["opa"] = {"status": "healthy" if opa_healthy else "unhealthy"}
-        
+
         # Overall status
         if not all([db_healthy, opa_healthy]):
             health_status["status"] = "unhealthy"
-        
+
         status_code = 200 if health_status["status"] == "healthy" else 503
         return JSONResponse(content=health_status, status_code=status_code)
-    
+
     @app.get("/metrics")
     async def metrics():
         """Prometheus metrics endpoint"""
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
-    
-    # API routers
-    # Import new auth router
+
+    # ------------------------------------------------------------------
+    # Router registry
+    # Convention: routers declare *relative* prefixes (e.g. "/transfers").
+    # Only this module applies the "/api/v1" (canonical) and "/api"
+    # (backward-compatible) version prefixes.
+    # ------------------------------------------------------------------
     from app.routers import auth_router
-    app.include_router(auth_router.router, prefix="/api")  # New JWT auth endpoints
-    app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])  # Existing auth
-    app.include_router(accounts.router, prefix="/api/accounts", tags=["Accounts"])
-    app.include_router(transactions.router, prefix="/api/transactions", tags=["Transactions"])
-    app.include_router(kyc.router, prefix="/api/kyc", tags=["KYC"])
-    app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
-    app.include_router(fraud.router, prefix="/api/fraud", tags=["Fraud Detection"])
-    
-    # New Go service proxy routers (Revolut features with African focus)
+
+    # Auth: canonical JWT router at /api/v1/auth + /api/auth
+    app.include_router(auth_router.router, prefix="/api/v1")
+    app.include_router(auth_router.router, prefix="/api")
+    # Legacy auth router (older request/response shapes)
+    app.include_router(auth.router, prefix="/api/legacy/auth", tags=["Authentication (legacy)"])
+
+    # Direct-DB routers (canonical PostgreSQL CRUD)
+    app.include_router(transactions.router, prefix="/api/v1")
+    app.include_router(transactions.router, prefix="/api")
+    app.include_router(dashboard.router, prefix="/api/v1")
+    app.include_router(dashboard.router, prefix="/api")
+    app.include_router(fraud.router, prefix="/api/v1")
+    app.include_router(fraud.router, prefix="/api")
+
+    # Feature routers (proxy to Go services or self-contained) — each router
+    # carries its own relative prefix; mounted under both API prefixes.
     from app.routers import (
         investment_router,
         savings_router,
@@ -216,142 +237,82 @@ def create_application() -> FastAPI:
         bill_payment_router,
         telecom_router,
         escrow_router,
-    )
-    
-    # Additional routers (previously unmounted)
-    from app.routers import (
         biometrics_router,
+        budget_router,
+        idv_router,
+        ml_router,
         card_router,
         compliance_router,
         device_router,
         dispute_router,
         fx_router,
-        kyc_router as kyc_router_v2,
+        kyc_router,
         lakehouse_router,
         lite_router,
         loan_router,
+        mojaloop_router,
         notification_router,
         qr_router,
         reconciliation_router,
+        segment_router,
         sms_router,
         transfer_router,
         ussd_router,
     )
-    
-    # Investment & Trading (African exchanges: NGX, JSE, NSE, etc.)
-    app.include_router(investment_router.router, prefix="/api/v1", tags=["Investments"])
-    # Also mount at /api for backward compatibility
-    app.include_router(investment_router.router, prefix="/api", tags=["Investments"])
-    
-    # Savings (Vaults, Fixed Deposits, Group Savings - Ajo/Esusu/Stokvel)
-    app.include_router(savings_router.router, prefix="/api/v1", tags=["Savings"])
-    app.include_router(savings_router.router, prefix="/api", tags=["Savings"])
-    
-    # Insurance (Travel, Device, Life)
-    app.include_router(insurance_router.router, prefix="/api/v1", tags=["Insurance"])
-    app.include_router(insurance_router.router, prefix="/api", tags=["Insurance"])
-    
-    # Buy Now Pay Later
-    app.include_router(bnpl_router.router, prefix="/api/v1", tags=["BNPL"])
-    app.include_router(bnpl_router.router, prefix="/api", tags=["BNPL"])
-    
-    # Kids & Joint Accounts
-    app.include_router(accounts_router.router, prefix="/api/v1", tags=["Account Types"])
-    app.include_router(accounts_router.router, prefix="/api", tags=["Account Types"])
-    
-    # Rewards & Cashback
-    app.include_router(rewards_router.router, prefix="/api/v1", tags=["Rewards"])
-    app.include_router(rewards_router.router, prefix="/api", tags=["Rewards"])
-    
-    # Analytics & Budgets
-    app.include_router(analytics_router.router, prefix="/api/v1", tags=["Analytics"])
-    app.include_router(analytics_router.router, prefix="/api", tags=["Analytics"])
-    
-    # Bill Payments & Subscriptions
-    app.include_router(bill_payment_router.router, prefix="/api/v1", tags=["Bills"])
-    app.include_router(bill_payment_router.router, prefix="/api", tags=["Bills"])
-    
-    # Telecom (Airtime, Data, eSIM)
-    app.include_router(telecom_router.router, prefix="/api/v1", tags=["Telecom"])
-    app.include_router(telecom_router.router, prefix="/api", tags=["Telecom"])
-    
-    # Escrow (P2P, Marketplace, Real Estate, Vehicle, Service, Milestone)
-    app.include_router(escrow_router.router, prefix="/api/v1", tags=["Escrow"])
-    app.include_router(escrow_router.router, prefix="/api", tags=["Escrow"])
-    
-    # Biometrics (Face ID, Fingerprint, Voice)
-    app.include_router(biometrics_router.router, prefix="/api/v1/biometrics", tags=["Biometrics"])
-    app.include_router(biometrics_router.router, prefix="/api/biometrics", tags=["Biometrics"])
-    
-    # Cards (Virtual, Physical, Controls)
-    app.include_router(card_router.router, prefix="/api/v1/cards", tags=["Cards"])
-    app.include_router(card_router.router, prefix="/api/cards", tags=["Cards"])
-    
-    # Compliance (AML, Sanctions, Reporting)
-    app.include_router(compliance_router.router, prefix="/api/v1/compliance", tags=["Compliance"])
-    app.include_router(compliance_router.router, prefix="/api/compliance", tags=["Compliance"])
-    
-    # Device Management (Registration, Trust)
-    app.include_router(device_router.router, prefix="/api/v1/devices", tags=["Devices"])
-    app.include_router(device_router.router, prefix="/api/devices", tags=["Devices"])
-    
-    # Disputes (Chargebacks, Resolution)
-    app.include_router(dispute_router.router, prefix="/api/v1/disputes", tags=["Disputes"])
-    app.include_router(dispute_router.router, prefix="/api/disputes", tags=["Disputes"])
-    
-    # FX (Currency Exchange, Rates)
-    app.include_router(fx_router.router, prefix="/api/v1/fx", tags=["FX"])
-    app.include_router(fx_router.router, prefix="/api/fx", tags=["FX"])
-    
-    # KYC v2 (Enhanced verification)
-    app.include_router(kyc_router_v2.router, prefix="/api/v1/kyc", tags=["KYC v2"])
-    
-    # Lakehouse (Analytics, Data Lake)
-    app.include_router(lakehouse_router.router, prefix="/api/v1/lakehouse", tags=["Lakehouse"])
-    app.include_router(lakehouse_router.router, prefix="/api/lakehouse", tags=["Lakehouse"])
-    
-    # Lite (Low bandwidth, Feature phones)
-    app.include_router(lite_router.router, prefix="/api/v1/lite", tags=["Lite"])
-    app.include_router(lite_router.router, prefix="/api/lite", tags=["Lite"])
-    
-    # Loans (Personal, Business, Mortgage)
-    app.include_router(loan_router.router, prefix="/api/v1/loans", tags=["Loans"])
-    app.include_router(loan_router.router, prefix="/api/loans", tags=["Loans"])
-    
-    # Notifications (Push, SMS, Email)
-    app.include_router(notification_router.router, prefix="/api/v1/notifications", tags=["Notifications"])
-    app.include_router(notification_router.router, prefix="/api/notifications", tags=["Notifications"])
-    
-    # QR Payments (Generate, Scan, Pay)
-    app.include_router(qr_router.router, prefix="/api/v1/qr", tags=["QR Payments"])
-    app.include_router(qr_router.router, prefix="/api/qr", tags=["QR Payments"])
-    
-    # Reconciliation (Settlement, Matching)
-    app.include_router(reconciliation_router.router, prefix="/api/v1/reconciliation", tags=["Reconciliation"])
-    app.include_router(reconciliation_router.router, prefix="/api/reconciliation", tags=["Reconciliation"])
-    
-    # SMS Banking (Feature phones)
-    app.include_router(sms_router.router, prefix="/api/v1/sms", tags=["SMS Banking"])
-    app.include_router(sms_router.router, prefix="/api/sms", tags=["SMS Banking"])
-    
-    # Transfers (Domestic, International, P2P)
-    app.include_router(transfer_router.router, prefix="/api/v1/transfers", tags=["Transfers"])
-    app.include_router(transfer_router.router, prefix="/api/transfers", tags=["Transfers"])
-    
-    # USSD Banking (Feature phones, Low connectivity)
-    app.include_router(ussd_router.router, prefix="/api/v1/ussd", tags=["USSD"])
-    app.include_router(ussd_router.router, prefix="/api/ussd", tags=["USSD"])
-    
-    # Mojaloop Interoperability (DFSP Adapter)
-    from app.routers import mojaloop_router
-    app.include_router(mojaloop_router.router, prefix="/api/v1", tags=["Mojaloop"])
-    app.include_router(mojaloop_router.router, prefix="/api", tags=["Mojaloop"])
-    
-    # Connectivity (Power management, Adaptive data, Offline sync, Data saver)
+
+    feature_routers = [
+        investment_router,
+        savings_router,
+        insurance_router,
+        bnpl_router,
+        accounts_router,
+        rewards_router,
+        analytics_router,
+        bill_payment_router,
+        telecom_router,
+        escrow_router,
+        biometrics_router,
+        budget_router,
+        idv_router,
+        ml_router,
+        card_router,
+        compliance_router,
+        device_router,
+        dispute_router,
+        fx_router,
+        kyc_router,
+        lakehouse_router,
+        lite_router,
+        loan_router,
+        mojaloop_router,
+        notification_router,
+        qr_router,
+        reconciliation_router,
+        segment_router,
+        sms_router,
+        transfer_router,
+        ussd_router,
+    ]
+
+    for module in feature_routers:
+        app.include_router(module.router, prefix="/api/v1")
+        app.include_router(module.router, prefix="/api")
+
+    # Notification legacy singular alias + investment plural alias
+    app.include_router(notification_router.legacy_router, prefix="/api/v1")
+    app.include_router(notification_router.legacy_router, prefix="/api")
+    app.include_router(investment_router.alias_router, prefix="/api/v1")
+    app.include_router(investment_router.alias_router, prefix="/api")
+
+    # KYB proxy (lives alongside the KYC proxy in kyc_router)
+    app.include_router(kyc_router.kyb_router, prefix="/api/v1")
+    app.include_router(kyc_router.kyb_router, prefix="/api")
+
+    # Connectivity (power management, adaptive data, offline sync, data saver)
     from app.routers import connectivity_router
     app.include_router(connectivity_router.router, prefix="/api/v1/connectivity", tags=["Connectivity"])
     app.include_router(connectivity_router.router, prefix="/api/connectivity", tags=["Connectivity"])
-    
+
     return app
 
 
@@ -361,7 +322,7 @@ app = create_application()
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
@@ -370,4 +331,3 @@ if __name__ == "__main__":
         log_level=settings.LOG_LEVEL.lower(),
         access_log=True,
     )
-

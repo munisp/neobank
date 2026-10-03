@@ -1,0 +1,21 @@
+# Permify — authorization (relationship-based) tuning
+server:
+  http:
+    port: 3476
+  grpc:
+    port: 3478
+database:
+  engine: postgres
+  uri: postgres://permify:${PGPASSWORD}@postgres-rw:5432/permify
+  max_open_connections: 50
+  max_idle_connections: 25
+  conn_max_lifetime: 300s
+  max_connection_idle_time: 60s
+cache:                         # in-process permission decision cache
+  type: memory
+  ttl: 60s
+service:
+  schema:
+    cache_size: 500
+distributed:
+  enabled: false               # single-region; enable + gossip for multi-DC

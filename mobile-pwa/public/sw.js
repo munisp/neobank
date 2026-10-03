@@ -1,140 +1,98 @@
-const CACHE_NAME = 'etherisc-neobank-v1.0.0';
-const urlsToCache = [
-  '/',
-  '/static/js/bundle.js',
-  '/static/css/main.css',
-  '/manifest.json',
-  'https://cdn.tailwindcss.com',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@400;500;600;700;800&display=swap',
-  'https://unpkg.com/lucide@latest/dist/umd/lucide.js'
-];
+/* NeoBank PWA service worker — performance-tuned caching strategies.
+ *
+ * Strategies:
+ *  - Static build assets (/assets/*, hashed by Vite): cache-first, immutable
+ *  - App shell (/, index.html, manifest): stale-while-revalidate
+ *  - API calls (/api/*): network-only with timeout — NEVER cache banking data
+ *  - Fonts/CDN: stale-while-revalidate with 7-day expiry
+ */
+const VERSION = 'neobank-v2.0.0';
+const STATIC_CACHE = `${VERSION}-static`;
+const SHELL_CACHE = `${VERSION}-shell`;
+const CDN_CACHE = `${VERSION}-cdn`;
 
-// Install event
+const API_TIMEOUT_MS = 8000;
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
+    caches.open(SHELL_CACHE)
+      .then((cache) => cache.addAll(['/', '/index.html', '/manifest.json', '/favicon.ico']))
+      .then(() => self.skipWaiting())
   );
 });
 
-// Fetch event
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Return cached version or fetch from network
-        if (response) {
-          return response;
-        }
-        
-        // Clone the request
-        const fetchRequest = event.request.clone();
-        
-        return fetch(fetchRequest).then((response) => {
-          // Check if valid response
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
-          }
-          
-          // Clone the response
-          const responseToCache = response.clone();
-          
-          caches.open(CACHE_NAME)
-            .then((cache) => {
-              cache.put(event.request, responseToCache);
-            });
-          
-          return response;
-        }).catch(() => {
-          // Return offline page for navigation requests
-          if (event.request.destination === 'document') {
-            return caches.match('/offline.html');
-          }
-        });
-      })
-  );
-});
-
-// Activate event
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            console.log('Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          }
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
+  );
+});
+
+function networkWithTimeout(request, timeoutMs) {
+  return Promise.race([
+    fetch(request),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs)),
+  ]);
+}
+
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== 'GET') return;
+
+  // API: network-only (never serve stale financial data)
+  if (url.pathname.startsWith('/api/')) {
+    event.respondWith(
+      networkWithTimeout(event.request, API_TIMEOUT_MS).catch(() =>
+        new Response(JSON.stringify({ error: 'offline', message: 'You appear to be offline' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
         })
-      );
+      )
+    );
+    return;
+  }
+
+  // Hashed Vite assets: cache-first (content-addressed, safe to cache forever)
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      caches.match(event.request).then((cached) =>
+        cached || fetch(event.request).then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(STATIC_CACHE).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+      )
+    );
+    return;
+  }
+
+  // Fonts / CDN: stale-while-revalidate
+  if (url.origin !== self.location.origin) {
+    event.respondWith(
+      caches.open(CDN_CACHE).then(async (cache) => {
+        const cached = await cache.match(event.request);
+        const network = fetch(event.request).then((response) => {
+          if (response.ok) cache.put(event.request, response.clone());
+          return response;
+        }).catch(() => cached);
+        return cached || network;
+      })
+    );
+    return;
+  }
+
+  // App shell: stale-while-revalidate
+  event.respondWith(
+    caches.open(SHELL_CACHE).then(async (cache) => {
+      const cached = await cache.match(event.request);
+      const network = fetch(event.request).then((response) => {
+        if (response.ok) cache.put(event.request, response.clone());
+        return response;
+      }).catch(() => cached || caches.match('/index.html'));
+      return cached || network;
     })
   );
 });
-
-// Background sync for offline transactions
-self.addEventListener('sync', (event) => {
-  if (event.tag === 'background-sync') {
-    event.waitUntil(doBackgroundSync());
-  }
-});
-
-function doBackgroundSync() {
-  // Handle offline transactions when back online
-  return new Promise((resolve) => {
-    // Implementation for syncing offline data
-    console.log('Background sync triggered');
-    resolve();
-  });
-}
-
-// Push notifications
-self.addEventListener('push', (event) => {
-  const options = {
-    body: event.data ? event.data.text() : 'New notification from Etherisc Neobank',
-    icon: '/logo192.png',
-    badge: '/badge-72x72.png',
-    vibrate: [100, 50, 100],
-    data: {
-      dateOfArrival: Date.now(),
-      primaryKey: 1
-    },
-    actions: [
-      {
-        action: 'explore',
-        title: 'View Details',
-        icon: '/icons/checkmark.png'
-      },
-      {
-        action: 'close',
-        title: 'Close',
-        icon: '/icons/xmark.png'
-      }
-    ]
-  };
-  
-  event.waitUntil(
-    self.registration.showNotification('Etherisc Neobank', options)
-  );
-});
-
-// Notification click handling
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  
-  if (event.action === 'explore') {
-    event.waitUntil(
-      clients.openWindow('/')
-    );
-  }
-});
-
-// Message handling for communication with main thread
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
-

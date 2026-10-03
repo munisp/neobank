@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { 
-  LayoutDashboard, 
+  LayoutDashboard,
+  Palette,
+  Users, 
   CreditCard, 
   ArrowLeftRight, 
   Send, 
@@ -17,6 +19,7 @@ import { Button } from '@/components/ui/button.jsx'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.jsx'
 import { Badge } from '@/components/ui/badge.jsx'
 import { useAuth } from '../contexts/AuthContext'
+import { ThemeToggle } from '@/components/ui/ThemeToggle.jsx'
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -25,6 +28,8 @@ const navigation = [
   { name: 'Transfer', href: '/transfer', icon: Send },
   { name: 'KYC Verification', href: '/kyc', icon: Shield },
   { name: 'Settings', href: '/settings', icon: Settings },
+  { name: 'Design System', href: '/design-system', icon: Palette },
+  { name: 'Segments & Apps', href: '/admin/segments', icon: Users },
 ]
 
 export default function Layout() {
@@ -39,16 +44,16 @@ export default function Layout() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-[var(--nb-surface-secondary)]">
       {/* Mobile sidebar */}
       <div className={`fixed inset-0 z-50 lg:hidden ${sidebarOpen ? 'block' : 'hidden'}`}>
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
-        <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-white shadow-xl">
-          <div className="flex h-16 items-center justify-between px-6 bg-blue-600">
+        <div className="fixed inset-0 bg-[var(--nb-surface-overlay)]" onClick={() => setSidebarOpen(false)} />
+        <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-[var(--nb-surface-primary)] shadow-xl">
+          <div className="flex h-16 items-center justify-between px-6 bg-[var(--nb-action-primary)]">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="h-8 w-8 bg-white rounded-lg flex items-center justify-center">
-                  <span className="text-blue-600 font-bold text-lg">N</span>
+                <div className="h-8 w-8 bg-[var(--nb-surface-primary)] rounded-[var(--nb-radius-xs)] flex items-center justify-center">
+                  <span className="text-[var(--nb-action-primary)] font-bold text-lg">N</span>
                 </div>
               </div>
               <span className="ml-3 text-white font-semibold text-lg">NeoBank</span>
@@ -57,7 +62,7 @@ export default function Layout() {
               variant="ghost"
               size="sm"
               onClick={() => setSidebarOpen(false)}
-              className="text-white hover:bg-blue-700"
+              className="text-[var(--nb-text-on-action)] hover:bg-[var(--nb-action-hover)]"
             >
               <X className="h-5 w-5" />
             </Button>
@@ -73,11 +78,11 @@ export default function Layout() {
                   onClick={() => setSidebarOpen(false)}
                   className={`group flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
                     isActive
-                      ? 'bg-blue-50 text-blue-700 border-r-2 border-blue-700'
-                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                      ? 'bg-[var(--nb-brand-50)] text-[var(--nb-brand-700)] border-r-2 border-[var(--nb-brand-700)]'
+                      : 'text-[var(--nb-text-secondary)] hover:bg-[var(--nb-surface-tertiary)] hover:text-[var(--nb-text-primary)]'
                   }`}
                 >
-                  <Icon className={`mr-3 h-5 w-5 ${isActive ? 'text-blue-700' : 'text-gray-400 group-hover:text-gray-500'}`} />
+                  <Icon className={`mr-3 h-5 w-5 ${isActive ? 'text-[var(--nb-brand-700)]' : 'text-[var(--nb-text-disabled)] group-hover:text-[var(--nb-text-secondary)]'}`} />
                   {item.name}
                 </Link>
               )
@@ -88,12 +93,12 @@ export default function Layout() {
 
       {/* Desktop sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-        <div className="flex flex-col flex-grow bg-white shadow-lg">
-          <div className="flex h-16 items-center px-6 bg-blue-600">
+        <div className="flex flex-col flex-grow bg-[var(--nb-surface-primary)] shadow-lg border-r border-[var(--nb-border-subtle)]">
+          <div className="flex h-16 items-center px-6 bg-[var(--nb-action-primary)]">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <div className="h-8 w-8 bg-white rounded-lg flex items-center justify-center">
-                  <span className="text-blue-600 font-bold text-lg">N</span>
+                <div className="h-8 w-8 bg-[var(--nb-surface-primary)] rounded-[var(--nb-radius-xs)] flex items-center justify-center">
+                  <span className="text-[var(--nb-action-primary)] font-bold text-lg">N</span>
                 </div>
               </div>
               <span className="ml-3 text-white font-semibold text-lg">NeoBank</span>
@@ -109,11 +114,11 @@ export default function Layout() {
                   to={item.href}
                   className={`group flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
                     isActive
-                      ? 'bg-blue-50 text-blue-700 border-r-2 border-blue-700'
-                      : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
+                      ? 'bg-[var(--nb-brand-50)] text-[var(--nb-brand-700)] border-r-2 border-[var(--nb-brand-700)]'
+                      : 'text-[var(--nb-text-secondary)] hover:bg-[var(--nb-surface-tertiary)] hover:text-[var(--nb-text-primary)]'
                   }`}
                 >
-                  <Icon className={`mr-3 h-5 w-5 ${isActive ? 'text-blue-700' : 'text-gray-400 group-hover:text-gray-500'}`} />
+                  <Icon className={`mr-3 h-5 w-5 ${isActive ? 'text-[var(--nb-brand-700)]' : 'text-[var(--nb-text-disabled)] group-hover:text-[var(--nb-text-secondary)]'}`} />
                   {item.name}
                 </Link>
               )
@@ -125,7 +130,7 @@ export default function Layout() {
       {/* Main content */}
       <div className="lg:pl-64">
         {/* Top bar */}
-        <div className="sticky top-0 z-40 bg-white shadow-sm border-b border-gray-200">
+        <div className="sticky top-0 z-40 bg-[var(--nb-surface-primary)] shadow-sm border-b border-[var(--nb-border-subtle)]">
           <div className="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
             <div className="flex items-center">
               <Button
@@ -136,12 +141,13 @@ export default function Layout() {
               >
                 <Menu className="h-5 w-5" />
               </Button>
-              <h1 className="ml-4 text-lg font-semibold text-gray-900 lg:ml-0">
+              <h1 className="ml-4 text-lg font-semibold text-[var(--nb-text-primary)] lg:ml-0">
                 {navigation.find(item => item.href === location.pathname)?.name || 'Dashboard'}
               </h1>
             </div>
 
             <div className="flex items-center space-x-4">
+              <ThemeToggle />
               {/* Notifications */}
               <Button variant="ghost" size="sm" className="relative">
                 <Bell className="h-5 w-5" />
@@ -159,14 +165,14 @@ export default function Layout() {
                   </AvatarFallback>
                 </Avatar>
                 <div className="hidden md:block">
-                  <p className="text-sm font-medium text-gray-900">{user?.name || 'User'}</p>
-                  <p className="text-xs text-gray-500">{user?.email}</p>
+                  <p className="text-sm font-medium text-[var(--nb-text-primary)]">{user?.name || 'User'}</p>
+                  <p className="text-xs text-[var(--nb-text-secondary)]">{user?.email}</p>
                 </div>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={handleLogout}
-                  className="text-gray-500 hover:text-gray-700"
+                  className="text-[var(--nb-text-secondary)] hover:text-[var(--nb-text-primary)]"
                 >
                   <LogOut className="h-4 w-4" />
                 </Button>

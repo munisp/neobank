@@ -14,12 +14,12 @@ import (
 )
 
 type AnalyticsHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewAnalyticsHandler(db *database.InMemoryDB, cfg *config.Config) *AnalyticsHandler {
+func NewAnalyticsHandler(db database.Store, cfg *config.Config) *AnalyticsHandler {
 	return &AnalyticsHandler{
 		db:        db,
 		cfg:       cfg,

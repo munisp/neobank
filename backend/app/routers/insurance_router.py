@@ -91,3 +91,25 @@ async def get_claim(id: str, authorization: Optional[str] = Header(None)):
     """Get claim details"""
     token = authorization.replace("Bearer ", "") if authorization else None
     return await proxy_request("GET", f"/claims/{id}", token=token)
+
+
+# ---------------------------------------------------------------------------
+# PWA contract aliases (Insurance.jsx / InsuranceQuote.jsx)
+# ---------------------------------------------------------------------------
+
+@router.get("/policy/{policy_id}")
+async def get_policy_alias(policy_id: str):
+    """Singular alias for /policies/{id} (PWA uses singular)."""
+    return await proxy_request("GET", f"/policies/{policy_id}")
+
+
+@router.post("/calculate-quote")
+async def calculate_quote_alias(data: Dict[str, Any]):
+    """Alias for /quotes (PWA InsuranceQuote screen)."""
+    return await proxy_request("POST", "/quotes", data)
+
+
+@router.post("/purchase")
+async def purchase_policy_alias(data: Dict[str, Any]):
+    """Alias for /policies (creates an active policy from an accepted quote)."""
+    return await proxy_request("POST", "/policies", data)

@@ -14,12 +14,12 @@ import (
 )
 
 type TelecomHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewTelecomHandler(db *database.InMemoryDB, cfg *config.Config) *TelecomHandler {
+func NewTelecomHandler(db database.Store, cfg *config.Config) *TelecomHandler {
 	return &TelecomHandler{
 		db:        db,
 		cfg:       cfg,

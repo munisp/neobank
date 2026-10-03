@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { applyColorMode } from './design/tenantTheme';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 
 // Components
@@ -46,6 +47,9 @@ import Documents from './pages/Documents';
 // Analytics Pages
 import Budget from './pages/Budget';
 import SpendingInsightsScreen from './pages/SpendingInsightsScreen';
+import Onboarding from './pages/Onboarding';
+import SecurityCenter from './pages/SecurityCenter';
+import AppStore from './pages/AppStore';
 
 // Services
 import { AuthService } from './services/AuthService';
@@ -79,12 +83,9 @@ function App() {
     // Initialize notification service
     NotificationService.initialize();
     
-    // Check for saved theme preference
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark') {
-      setDarkMode(true);
-      document.documentElement.classList.add('dark');
-    }
+    // Theme boot is handled by initTheme() in main.jsx (system-aware);
+    // mirror the applied mode into local state once.
+    setDarkMode(document.documentElement.classList.contains('dark'));
 
     // Register service worker
     if ('serviceWorker' in navigator) {
@@ -99,21 +100,16 @@ function App() {
   }, []);
 
   const toggleTheme = () => {
-    setDarkMode(!darkMode);
-    if (!darkMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
+    const next = !darkMode;
+    setDarkMode(next);
+    applyColorMode(next ? 'dark' : 'light');
   };
 
   return (
     <AuthProvider>
       <NotificationProvider>
         <Router>
-          <div className={`min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200 ${darkMode ? 'dark' : ''}`}>
+          <div className={`min-h-screen bg-[var(--nb-surface-secondary)] transition-colors duration-200 ${darkMode ? 'dark' : ''}`}>
             <Routes>
               {/* Public Routes */}
               <Route path="/login" element={<Login />} />
@@ -176,12 +172,15 @@ function App() {
                             {/* User Routes */}
                             <Route path="/profile" element={<Profile />} />
                             <Route path="/settings" element={<Settings />} />
+                            <Route path="/security" element={<SecurityCenter />} />
+                            <Route path="/store" element={<AppStore />} />
                             <Route path="/notifications" element={<Notifications />} />
                             <Route path="/documents" element={<Documents />} />
                             
                             {/* Analytics Routes */}
                             <Route path="/budget" element={<Budget />} />
                             <Route path="/insights" element={<SpendingInsightsScreen />} />
+                            <Route path="/onboarding" element={<Onboarding />} />
                             
                             {/* 404 */}
                             <Route path="*" element={<Navigate to="/dashboard" replace />} />

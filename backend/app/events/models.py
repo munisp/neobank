@@ -16,7 +16,7 @@ import json
 # BASE EVENT CLASSES
 # ============================================================================
 
-@dataclass
+@dataclass(kw_only=True)
 class BaseEvent:
     """Base class for all domain events"""
     

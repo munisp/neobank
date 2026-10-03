@@ -11,7 +11,7 @@ class UserBase(BaseModel):
     """Base user schema"""
     email: EmailStr
     full_name: str = Field(..., min_length=2, max_length=255)
-    phone_number: Optional[str] = Field(None, regex=r'^\+?[1-9]\d{1,14}$')
+    phone_number: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')
     date_of_birth: Optional[date] = None
     address: Optional[str] = Field(None, max_length=500)
 
@@ -128,19 +128,19 @@ class EmailVerificationRequest(BaseModel):
 
 class PhoneVerificationRequest(BaseModel):
     """Schema for phone verification request"""
-    phone_number: str = Field(..., regex=r'^\+?[1-9]\d{1,14}$')
+    phone_number: str = Field(..., pattern=r'^\+?[1-9]\d{1,14}$')
 
 
 class PhoneVerificationConfirm(BaseModel):
     """Schema for phone verification confirmation"""
-    phone_number: str = Field(..., regex=r'^\+?[1-9]\d{1,14}$')
+    phone_number: str = Field(..., pattern=r'^\+?[1-9]\d{1,14}$')
     verification_code: str = Field(..., min_length=4, max_length=8)
 
 
 class UserUpdate(BaseModel):
     """Schema for user profile update"""
     full_name: Optional[str] = Field(None, min_length=2, max_length=255)
-    phone_number: Optional[str] = Field(None, regex=r'^\+?[1-9]\d{1,14}$')
+    phone_number: Optional[str] = Field(None, pattern=r'^\+?[1-9]\d{1,14}$')
     date_of_birth: Optional[date] = None
     address: Optional[str] = Field(None, max_length=500)
 

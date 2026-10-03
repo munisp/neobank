@@ -15,7 +15,11 @@ from typing import Optional, List, Dict, Any, Tuple
 from decimal import Decimal
 from uuid import UUID
 import structlog
-from tigerbeetle import Client, Account, Transfer, AccountFlags, TransferFlags
+# tigerbeetle >= 0.16 renamed the sync client; keep a stable `Client` alias.
+try:
+    from tigerbeetle import Client, Account, Transfer, AccountFlags, TransferFlags
+except ImportError:  # new API
+    from tigerbeetle import ClientSync as Client, Account, Transfer, AccountFlags, TransferFlags
 
 logger = structlog.get_logger(__name__)
 
@@ -139,6 +143,9 @@ class TigerBeetleClient:
         try:
             # Connect to TigerBeetle cluster - production-ready configuration
             cluster_id = int(os.getenv("TIGERBEETLE_CLUSTER_ID", "0"))
+            if os.getenv("TIGERBEETLE_DISABLED", "").lower() in {"1", "true", "yes"}:
+                logger.warning("TigerBeetle client disabled by environment")
+                return
             
             # Get addresses from environment or use defaults
             # Format: comma-separated list of host:port
@@ -151,7 +158,7 @@ class TigerBeetleClient:
             
             self._client = Client(
                 cluster_id=cluster_id,
-                replica_addresses=addresses
+                replica_addresses=",".join(addresses)
             )
             
             logger.info("TigerBeetle client initialized", 
@@ -162,6 +169,11 @@ class TigerBeetleClient:
             logger.error("Failed to initialize TigerBeetle client", error=str(e))
             raise
     
+    @property
+    def is_available(self) -> bool:
+        """Whether the TigerBeetle client is initialized and usable."""
+        return self._client is not None
+
     @property
     def client(self) -> Client:
         """Get TigerBeetle client instance"""
@@ -192,7 +204,7 @@ class TigerBeetleClient:
                 ledger=ledger,
                 code=code,
                 flags=flags,
-                user_data=user_data
+                user_data_64=user_data
             )
             
             results = self.client.create_accounts([account])
@@ -255,7 +267,7 @@ class TigerBeetleClient:
                 ledger=ledger,
                 code=code,
                 flags=flags,
-                user_data=user_data,
+                user_data_64=user_data,
                 timeout=timeout,
                 timestamp=0
             )
@@ -396,7 +408,7 @@ class TigerBeetleClient:
             code=code,
             flags=TransferFlags.PENDING,
             timeout=timeout_seconds,
-            user_data=user_data
+            user_data_64=user_data
         )
     
     def post_pending_transfer(
@@ -512,7 +524,7 @@ class TigerBeetleClient:
                     ledger=t["ledger"],
                     code=t["code"],
                     flags=flags,
-                    user_data=t.get("user_data", 0),
+                    user_data_64=t.get("user_data", 0),
                     timeout=0,
                     timestamp=0
                 ))

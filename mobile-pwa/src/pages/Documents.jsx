@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AuthContext } from '../services/AuthService';
+import { AuthContext } from '../contexts/AuthContext';
 import { ApiService } from '../services/ApiService';
 import { NotificationService } from '../services/NotificationService';
 

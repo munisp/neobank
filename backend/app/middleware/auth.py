@@ -12,6 +12,7 @@ from fastapi import HTTPException, Security, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from starlette.middleware.base import BaseHTTPMiddleware
 import structlog
 
 logger = structlog.get_logger()
@@ -34,6 +35,27 @@ class TokenType:
     """Token types"""
     ACCESS = "access"
     REFRESH = "refresh"
+
+
+# ---------------------------------------------------------------------------
+# Password hashing (bcrypt via the canonical context in database.models)
+# ---------------------------------------------------------------------------
+
+def hash_password(password: str) -> str:
+    """Hash a plaintext password with bcrypt."""
+    from database.models import pwd_context
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against a stored hash; False on malformed hashes."""
+    from database.models import pwd_context
+    if not hashed_password:
+        return False
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:  # noqa: BLE001 - passlib raises ValueError on bad hashes
+        return False
 
 
 class UserRole:
@@ -210,6 +232,24 @@ async def get_current_user(token_payload: Dict[str, Any] = Depends(verify_token)
     }
 
 
+# Backward-compatible alias used by older routers.
+require_auth = get_current_user
+
+
+async def get_current_user_from_credentials(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+) -> Dict[str, Any]:
+    """Compose verify_token + get_current_user for endpoints that take raw
+    HTTPBearer credentials instead of the Depends chain."""
+    token_payload = await verify_token(credentials)
+    return {
+        "user_id": token_payload["sub"],
+        "email": token_payload.get("email"),
+        "roles": token_payload.get("roles", []),
+        "token_payload": token_payload,
+    }
+
+
 def require_roles(required_roles: List[str]):
     """
     Decorator to require specific roles
@@ -282,15 +322,12 @@ async def get_optional_user(credentials: Optional[HTTPAuthorizationCredentials] 
         return None
 
 
-class AuthenticationMiddleware:
+class AuthenticationMiddleware(BaseHTTPMiddleware):
     """
     Middleware to add authentication context to requests
     """
-    
-    def __init__(self, app):
-        self.app = app
-    
-    async def __call__(self, request: Request, call_next):
+
+    async def dispatch(self, request: Request, call_next):
         """Process request and add auth context"""
         
         # Extract token from Authorization header
@@ -306,6 +343,11 @@ class AuthenticationMiddleware:
                 request.state.user_id = payload.get("sub")
                 request.state.user_email = payload.get("email")
                 request.state.user_roles = payload.get("roles", [])
+                request.state.user = {
+                    "user_id": payload.get("sub"),
+                    "email": payload.get("email"),
+                    "roles": payload.get("roles", []),
+                }
                 request.state.authenticated = True
                 
                 logger.debug(
@@ -390,10 +432,32 @@ class RateLimiter:
         self.attempts[key].append((now, 1))
         
         return True
+    async def acheck_rate_limit(self, key: str, max_attempts: int = 5, window_seconds: int = 300) -> bool:
+        """Async rate limit check backed by the Redis sliding-window limiter
+        (falls back to the in-memory path when Redis is unavailable)."""
+        from app.services.redis_rate_limiter import auth_rate_limiter
+        try:
+            allowed = await auth_rate_limiter.ahit(key, max_attempts, window_seconds)
+            if not allowed:
+                logger.warning("Rate limit exceeded", key=key)
+            return allowed
+        except Exception:  # noqa: BLE001 - never fail closed on limiter errors
+            logger.warning("Redis rate limiter error, using memory path", exc_info=True)
+            return self.check_rate_limit(key, max_attempts, window_seconds)
 
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
+
+
+async def acheck_auth_rate_limit(request: Request, max_attempts: int = 5, window_seconds: int = 300):
+    """Async auth rate limit check (Redis-backed)."""
+    client_ip = request.client.host if request.client else "unknown"
+    if not await rate_limiter.acheck_rate_limit(client_ip, max_attempts, window_seconds):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many authentication attempts. Please try again later."
+        )
 
 
 def check_auth_rate_limit(request: Request, max_attempts: int = 5):

@@ -25,8 +25,8 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 import xgboost as xgb
 import lightgbm as lgb
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..database.models import User, Account, Transaction
-from ..config.settings import settings
+from database.models import User, Account, Transaction
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../services/AuthService'; // Assuming a hook for auth context
+import { useAuth } from '../hooks/useAuth';
 import ApiService from '../services/ApiService';
 import NotificationService from '../services/NotificationService';
 

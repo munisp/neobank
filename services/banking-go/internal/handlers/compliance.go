@@ -14,12 +14,12 @@ import (
 
 // ComplianceHandler handles compliance-related HTTP requests
 type ComplianceHandler struct {
-	db  *database.InMemoryDB
+	db  database.Store
 	cfg *config.Config
 }
 
 // NewComplianceHandler creates a new compliance handler
-func NewComplianceHandler(db *database.InMemoryDB, cfg *config.Config) *ComplianceHandler {
+func NewComplianceHandler(db database.Store, cfg *config.Config) *ComplianceHandler {
 	return &ComplianceHandler{db: db, cfg: cfg}
 }
 

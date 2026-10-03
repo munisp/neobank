@@ -1,246 +1,162 @@
-import React, { useState, useEffect, useContext, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import { TrendingDown, TrendingUp, Wallet, CalendarDays } from 'lucide-react';
+import { NBCard, NBStatusPill, NBSkeletonCard } from '../components/ui/nb/index.js';
+import { Amount } from '../components/ui/Amount.jsx';
 
-// Mock imports for required services and UI components
-// In a real application, these would be implemented and imported from the specified paths.
-import { AuthService } from '../services/AuthService';
-import { ApiService } from '../services/ApiService';
-import { NotificationService } from '../services/NotificationService';
-import {
-  Card,
-  Spinner,
-  Alert,
-  Button,
-  ChartPlaceholder,
-  CategoryList,
-  RecommendationCard,
-  OfflineIndicator,
-  Header,
-  Footer,
-} from '../components/ui/';
+/**
+ * Insights (Sections 7.6 + 8): "am I okay?" first, then data.
+ * - Spending donut (≤5 slices, center KPI, account-wheel colors)
+ * - Budget pace indicators (supportive, not judgmental)
+ * - Safe-to-spend-today with transparent, tappable formula
+ * - Cash-flow bar chart (honest axes, starts at zero)
+ * Every chart has a text takeaway read first by screen readers.
+ */
 
-// --- Data Structures (Mocked) ---
+const SPEND = [
+  { name: 'Food & drink', value: 18400, color: 'var(--nb-acct-03)' },
+  { name: 'Data & airtime', value: 9600, color: 'var(--nb-acct-07)' },
+  { name: 'Transport', value: 7200, color: 'var(--nb-acct-02)' },
+  { name: 'School', value: 5000, color: 'var(--nb-acct-01)' },
+  { name: 'Other', value: 4300, color: 'var(--nb-acct-05)' },
+];
+const CASHFLOW = [
+  { wk: 'W1', inflow: 50000, outflow: 11800 },
+  { wk: 'W2', inflow: 0, outflow: 9800 },
+  { wk: 'W3', inflow: 15000, outflow: 12100 },
+  { wk: 'W4', inflow: 0, outflow: 10800 },
+];
+const BUDGETS = [
+  { name: 'Food & drink', spent: 18400, limit: 25000 },
+  { name: 'Data & airtime', spent: 9600, limit: 8000 },
+  { name: 'Transport', spent: 7200, limit: 10000 },
+];
 
-interface SpendingCategory {
-  id: string;
-  name: string;
-  amount: number;
-  percentage: number;
-  color: string;
-}
+const TOTAL = SPEND.reduce((s, c) => s + c.value, 0);
+const SAFE = 2340; // per day
 
-interface SpendingTrend {
-  month: string;
-  spending: number;
-}
+export default function SpendingInsightsScreen() {
+  const [loading, setLoading] = useState(true);
+  const [showFormula, setShowFormula] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setLoading(false), 600); return () => clearTimeout(t); }, []);
 
-interface Recommendation {
-  id: string;
-  title: string;
-  description: string;
-  actionLink: string;
-}
-
-interface SpendingInsightsData {
-  totalSpending: number;
-  categories: SpendingCategory[];
-  trends: SpendingTrend[];
-  recommendations: Recommendation[];
-}
-
-// --- Mock Context for Offline Status (Requirement 8) ---
-// In a real PWA, this would likely be a global context or a custom hook
-// that monitors network status.
-interface AppContextType {
-  isOnline: boolean;
-}
-const AppContext = React.createContext<AppContextType>({ isOnline: true });
-
-// --- Mock Data Fetching Function ---
-const fetchSpendingInsights = async (): Promise<SpendingInsightsData> => {
-  // Simulate API call delay
-  await new Promise(resolve => setTimeout(resolve, 1500));
-
-  // Simulate an error 10% of the time
-  if (Math.random() < 0.1) {
-    throw new Error('Failed to fetch spending insights. Please try again.');
-  }
-
-  // Mock successful data
-  return {
-    totalSpending: 2450.75,
-    categories: [
-      { id: '1', name: 'Groceries', amount: 750.50, percentage: 30.6, color: 'bg-red-500' },
-      { id: '2', name: 'Rent', amount: 1000.00, percentage: 40.8, color: 'bg-blue-500' },
-      { id: '3', name: 'Entertainment', amount: 300.25, percentage: 12.2, color: 'bg-green-500' },
-      { id: '4', name: 'Transport', amount: 200.00, percentage: 8.2, color: 'bg-yellow-500' },
-      { id: '5', name: 'Other', amount: 100.00, percentage: 4.1, color: 'bg-purple-500' },
-    ],
-    trends: [
-      { month: 'Jan', spending: 1800 },
-      { month: 'Feb', spending: 2100 },
-      { month: 'Mar', spending: 1950 },
-      { month: 'Apr', spending: 2450.75 },
-    ],
-    recommendations: [
-      { id: 'r1', title: 'Cut down on Groceries', description: 'Your grocery spending is 30% of your total. Consider a budget of $600.', actionLink: '/budget-settings' },
-      { id: 'r2', title: 'Save on Entertainment', description: 'You spent $300 on entertainment. Look for cheaper alternatives this month.', actionLink: '/savings-tips' },
-    ],
-  };
-};
-
-// --- Component Definition ---
-
-const SpendingInsightsScreen: React.FC = () => {
-  const [insights, setInsights] = useState<SpendingInsightsData | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const { isOnline } = useContext(AppContext); // Use mock context
-
-  const navigate = useNavigate(); // Requirement 10
-
-  // Event handler for a recommendation action
-  const handleRecommendationAction = useCallback((link: string) => {
-    NotificationService.notify(`Navigating to ${link}`);
-    navigate(link);
-  }, [navigate]);
-
-  // Data fetching logic (Requirement 2, 6)
-  useEffect(() => {
-    const loadInsights = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        // Mock authentication check before API call
-        if (!AuthService.isAuthenticated()) {
-          // In a real app, this would redirect to login
-          console.error('User not authenticated. Redirecting...');
-          // navigate('/login');
-          return;
-        }
-
-        const data = await fetchSpendingInsights();
-        setInsights(data);
-        NotificationService.notify('Spending insights loaded successfully.');
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        setError(errorMessage);
-        NotificationService.notify(errorMessage, 'error');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadInsights();
-  }, []);
-
-  // --- Render Logic (Requirement 6) ---
-
-  if (isLoading) {
+  if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-gray-50">
-        <Spinner />
-        <p className="mt-4 text-gray-600">Loading your personalized insights...</p>
+      <div style={{ maxWidth: 720, margin: '0 auto', padding: 16 }}>
+        <NBSkeletonCard /><div style={{ height: 16 }} /><NBSkeletonCard />
       </div>
     );
   }
-
-  if (error) {
-    return (
-      <div className="p-4 bg-gray-50 min-h-screen">
-        <Header title="Spending Insights" />
-        <Alert type="error" message={error} />
-        <div className="mt-6 text-center">
-          <Button onClick={() => window.location.reload()}>Try Again</Button>
-        </div>
-      </div>
-    );
-  }
-
-  // Empty state (Requirement 6)
-  if (!insights || insights.categories.length === 0) {
-    return (
-      <div className="p-4 bg-gray-50 min-h-screen">
-        <Header title="Spending Insights" />
-        <div className="flex flex-col items-center justify-center h-[80vh] text-center">
-          <h2 className="text-xl font-semibold text-gray-700">No Spending Data Available</h2>
-          <p className="mt-2 text-gray-500">It looks like you haven't made any transactions this period. Start spending to see your insights!</p>
-          <Link to="/transactions/new" className="mt-4">
-            <Button>Record a Transaction</Button>
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  // --- Main Content Render (Requirement 5, 7) ---
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header title="Spending Insights" />
+    <div className="safe-bottom" style={{ maxWidth: 720, margin: '0 auto', padding: '16px 16px 96px' }}>
+      <h1 style={{ fontSize: 26, fontWeight: 700, margin: '8px 0 4px', color: 'var(--nb-text-primary)' }}>Insights</h1>
+      <p style={{ margin: '0 0 20px', fontSize: 14, color: 'var(--nb-text-secondary)' }}>October · updated just now</p>
 
-      <main className="p-4 space-y-6 max-w-4xl mx-auto md:p-6">
-        {/* Offline Indicator (Requirement 8) */}
-        {!isOnline && <OfflineIndicator message="You are currently offline. Data may be outdated." />}
+      {/* Am I okay? — the answer before the data */}
+      <NBCard padding={16} style={{ background: 'var(--nb-feedback-success-surface)', border: 'none', marginBottom: 20 }}>
+        <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--nb-feedback-success)', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <TrendingDown size={18} aria-hidden="true" /> You’re doing fine — spending is 12% under last month.
+        </p>
+      </NBCard>
 
-        {/* Total Spending Summary */}
-        <Card className="shadow-lg">
-          <h2 className="text-lg font-semibold text-gray-800 mb-2">Total Spending (Last 30 Days)</h2>
-          <p className="text-4xl font-bold text-indigo-600">
-            ${insights.totalSpending.toFixed(2)}
-          </p>
-          <p className="text-sm text-gray-500 mt-1">
-            This is a 5% increase from the previous period.
-          </p>
-        </Card>
-
-        {/* Spending by Category (Charts) */}
-        <Card>
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Spending by Category</h2>
-          {/* Placeholder for Pie/Donut Chart (Requirement 1) */}
-          <div className="h-48 w-full mb-4">
-            <ChartPlaceholder type="Pie" data={insights.categories} />
+      {/* Safe to spend today — transparent formula */}
+      <NBCard padding={20} style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: 'var(--nb-text-secondary)', display: 'flex', gap: 6, alignItems: 'center' }}>
+              <Wallet size={15} aria-hidden="true" /> Safe to spend today
+            </p>
+            <p style={{ margin: '4px 0 0', fontSize: 30, fontWeight: 700, color: 'var(--nb-text-primary)' }}>
+              <Amount value={SAFE} direction="neutral" />
+            </p>
           </div>
-          {/* Category Breakdown List */}
-          <CategoryList categories={insights.categories} />
-        </Card>
-
-        {/* Spending Trends (Charts) */}
-        <Card>
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">Spending Trends</h2>
-          <p className="text-sm text-gray-500 mb-4">
-            Monthly spending over the last 6 months.
+          <button type="button" onClick={() => setShowFormula(!showFormula)} aria-expanded={showFormula}
+            style={{ background: 'none', border: 'none', color: 'var(--nb-action-primary)', fontWeight: 600, fontSize: 14, cursor: 'pointer', minHeight: 44, padding: '0 8px' }}>
+            How is this worked out?
+          </button>
+        </div>
+        {showFormula && (
+          <p style={{ margin: '12px 0 0', fontSize: 13, lineHeight: '19px', color: 'var(--nb-text-secondary)', borderTop: '1px solid var(--nb-border-subtle)', paddingTop: 12 }}>
+            (Everyday balance ₦184,500 − upcoming bills ₦8,500 − savings goal ₦100,000) ÷ 33 days left of term = ₦2,340/day.
           </p>
-          {/* Placeholder for Line Chart (Requirement 1) */}
-          <div className="h-64 w-full">
-            <ChartPlaceholder type="Line" data={insights.trends} />
-          </div>
-        </Card>
+        )}
+      </NBCard>
 
-        {/* Recommendations and Actionable Insights (Requirement 1) */}
-        <section>
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Actionable Recommendations</h2>
-          <div className="space-y-3">
-            {insights.recommendations.map(rec => (
-              <RecommendationCard
-                key={rec.id}
-                title={rec.title}
-                description={rec.description}
-                onAction={() => handleRecommendationAction(rec.actionLink)}
-              />
-            ))}
+      {/* Spending donut — ≤5 slices, center KPI, text takeaway first */}
+      <NBCard padding={20} style={{ marginBottom: 20 }}>
+        <h2 style={{ margin: '0 0 4px', fontSize: 17, fontWeight: 600, color: 'var(--nb-text-primary)' }}>Where your money went</h2>
+        <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--nb-text-secondary)' }}>
+          Food & drink is your biggest category at ₦18,400 (41% of spending).
+        </p>
+        <div style={{ height: 200, position: 'relative' }} role="img" aria-label={`Spending this month totals ₦${TOTAL.toLocaleString()}. Food and drink ₦18,400, data ₦9,600, transport ₦7,200, school ₦5,000, other ₦4,300.`}>
+          <ResponsiveContainer>
+            <PieChart>
+              <Pie data={SPEND} dataKey="value" innerRadius={60} outerRadius={85} paddingAngle={2} strokeWidth={0} isAnimationActive={!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches}>
+                {SPEND.map((s) => <Cell key={s.name} fill={s.color} />)}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+            <span className="tabular" style={{ fontSize: 18, fontWeight: 700, color: 'var(--nb-text-primary)' }}>₦{TOTAL.toLocaleString()}</span>
+            <span style={{ fontSize: 12, color: 'var(--nb-text-secondary)' }}>this month</span>
           </div>
-        </section>
+        </div>
+        <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0 }}>
+          {SPEND.map((s) => (
+            <li key={s.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', fontSize: 14 }}>
+              <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 3, background: s.color, flexShrink: 0 }} />
+              <span style={{ flex: 1, color: 'var(--nb-text-primary)' }}>{s.name}</span>
+              <span className="tabular" style={{ color: 'var(--nb-text-secondary)' }}>₦{s.value.toLocaleString()}</span>
+            </li>
+          ))}
+        </ul>
+      </NBCard>
 
-        {/* Footer or Navigation Links */}
-        <Footer>
-          <Link to="/settings/insights" className="text-sm text-indigo-600 hover:text-indigo-800">
-            Adjust Insight Preferences
-          </Link>
-        </Footer>
-      </main>
+      {/* Budgets — pace indicator, supportive */}
+      <NBCard padding={20} style={{ marginBottom: 20 }}>
+        <h2 style={{ margin: '0 0 12px', fontSize: 17, fontWeight: 600, color: 'var(--nb-text-primary)' }}>Budgets</h2>
+        {BUDGETS.map((b) => {
+          const pct = Math.round((b.spent / b.limit) * 100);
+          const onTrack = pct <= 85;
+          return (
+            <div key={b.name} style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 6 }}>
+                <span style={{ fontWeight: 600, color: 'var(--nb-text-primary)' }}>{b.name}</span>
+                <NBStatusPill tone={onTrack ? 'success' : 'warning'}>{onTrack ? 'On track' : 'Over pace — no stress, adjust below'}</NBStatusPill>
+              </div>
+              <div role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${b.name} budget ${pct}% used`}
+                style={{ height: 8, borderRadius: 999, background: 'var(--nb-surface-tertiary)' }}>
+                <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, borderRadius: 999, background: onTrack ? 'var(--nb-feedback-success)' : 'var(--nb-feedback-warning)' }} />
+              </div>
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--nb-text-secondary)' }} className="tabular">
+                ₦{b.spent.toLocaleString()} of ₦{b.limit.toLocaleString()} ({pct}%)
+              </p>
+            </div>
+          );
+        })}
+      </NBCard>
+
+      {/* Cash flow — honest axes, starts at zero */}
+      <NBCard padding={20}>
+        <h2 style={{ margin: '0 0 4px', fontSize: 17, fontWeight: 600, color: 'var(--nb-text-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <CalendarDays size={17} aria-hidden="true" /> Weekly cash flow
+        </h2>
+        <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--nb-text-secondary)' }}>
+          Your biggest inflow was ₦50,000 in week 1; outflows stay near ₦11,000/week.
+        </p>
+        <div style={{ height: 180 }} role="img" aria-label="Weekly cash flow bar chart. Week 1 inflow 50,000 outflow 11,800. Week 2 outflow 9,800. Week 3 inflow 15,000 outflow 12,100. Week 4 outflow 10,800.">
+          <ResponsiveContainer>
+            <BarChart data={CASHFLOW} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+              <XAxis dataKey="wk" tick={{ fontSize: 12, fill: 'var(--nb-text-secondary)' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: 'var(--nb-text-secondary)' }} axisLine={false} tickLine={false} tickFormatter={(v) => `₦${v / 1000}k`} />
+              <Tooltip formatter={(v) => `₦${Number(v).toLocaleString()}`} cursor={{ fill: 'var(--nb-surface-tertiary)' }} />
+              <Bar dataKey="inflow" name="Money in" fill="var(--nb-feedback-success)" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="outflow" name="Money out" fill="var(--nb-acct-03)" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </NBCard>
     </div>
   );
-};
-
-export default SpendingInsightsScreen;
+}

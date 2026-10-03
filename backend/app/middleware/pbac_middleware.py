@@ -173,6 +173,7 @@ ROUTE_PERMISSIONS: Dict[str, Dict[str, Any]] = {
 
 # Public routes that don't require authorization
 PUBLIC_ROUTES = [
+    "GET /health",
     "GET /api/v1/health",
     "GET /api/v1/docs",
     "GET /api/v1/openapi.json",
@@ -180,6 +181,14 @@ PUBLIC_ROUTES = [
     "POST /api/v1/auth/register",
     "POST /api/v1/auth/refresh",
     "GET /api/v1/auth/verify",
+    "GET /api/v1/auth/validate",
+    "POST /api/v1/auth/forgot-password",
+    "POST /api/v1/auth/reset-password",
+    # IDV endpoints authenticate via their own X-API-Key (idv_router.require_idv_api_key)
+    "POST /api/v1/idv/",
+    "GET /api/v1/idv/",
+    "POST /api/idv/",
+    "GET /api/idv/",
 ]
 
 

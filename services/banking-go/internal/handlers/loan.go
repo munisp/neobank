@@ -15,12 +15,12 @@ import (
 
 // LoanHandler handles loan-related HTTP requests
 type LoanHandler struct {
-	db  *database.InMemoryDB
+	db  database.Store
 	cfg *config.Config
 }
 
 // NewLoanHandler creates a new loan handler
-func NewLoanHandler(db *database.InMemoryDB, cfg *config.Config) *LoanHandler {
+func NewLoanHandler(db database.Store, cfg *config.Config) *LoanHandler {
 	return &LoanHandler{db: db, cfg: cfg}
 }
 

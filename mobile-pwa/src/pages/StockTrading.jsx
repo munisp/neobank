@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 // Mock imports for required services and UI components
 // In a real project, these would be actual files.
-import { useAuth } from '../services/AuthService'; // Assuming a context hook for auth
-import { useApi } from '../services/ApiService'; // Assuming a context hook for API
-import { useNotification } from '../services/NotificationService'; // Assuming a context hook for notifications
+import { useAuth } from '../hooks/useAuth';
+import { useApi } from '../hooks/useApi';
+import { useNotification } from '../hooks/useNotification';
 
 // UI Components (Mocked)
 import { Button } from '../components/ui/Button';
@@ -440,95 +440,4 @@ const StockTradingScreen: React.FC = () => {
   );
 };
 
-// Mock components for completeness (assuming they exist in ../components/ui/)
-// In a real scenario, these would be imported from a UI library.
-const MockComponent: React.FC<{ children: React.ReactNode, className?: string }> = ({ children, className }) => <div className={className}>{children}</div>;
-const MockButton: React.FC<any> = ({ children, onClick, className, variant = 'primary', size = 'md', ...props }) => (
-  <button
-    onClick={onClick}
-    className={`px-4 py-2 rounded-md font-medium transition-colors ${className} ${
-      variant === 'primary' ? 'bg-blue-600 text-white hover:bg-blue-700' :
-      variant === 'secondary' ? 'bg-gray-200 text-gray-800 hover:bg-gray-300' :
-      variant === 'danger' ? 'bg-red-600 text-white hover:bg-red-700' :
-      'text-blue-600 hover:bg-blue-50'
-    } ${size === 'sm' ? 'text-sm' : 'text-base'}`}
-    {...props}
-  >
-    {children}
-  </button>
-);
-const MockInput: React.FC<any> = (props) => <input className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm" {...props} />;
-const MockSpinner: React.FC<any> = () => <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>;
-const MockModal: React.FC<any> = ({ isOpen, onClose, title, children }) => isOpen ? (
-  <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex justify-center items-center">
-    <div className="bg-white rounded-lg shadow-xl w-full max-w-md m-4">
-      <div className="flex justify-between items-center p-4 border-b">
-        <h3 className="text-xl font-semibold">{title}</h3>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600">&times;</button>
-      </div>
-      <div className="p-4">{children}</div>
-    </div>
-  </div>
-) : null;
-const MockTabs: React.FC<any> = ({ activeTab, onTabChange, children }) => (
-  <div className="border-b border-gray-200">
-    <nav className="-mb-px flex space-x-8" aria-label="Tabs">
-      {React.Children.map(children, (child) => {
-        if (React.isValidElement(child) && child.type === MockTabItem) {
-          const isActive = child.props.id === activeTab;
-          return (
-            <button
-              key={child.props.id}
-              onClick={() => onTabChange(child.props.id)}
-              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${
-                isActive
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              {child.props.title}
-            </button>
-          );
-        }
-        return null;
-      })}
-    </nav>
-  </div>
-);
-const MockTabItem: React.FC<any> = () => null;
-const MockIcon: React.FC<any> = ({ name, className }) => <span className={className} role="img" aria-label={name}>*</span>; // Simple mock icon
-
-// Re-exporting mocks to satisfy imports
-const Card = MockComponent;
-const Button = MockButton;
-const Input = MockInput;
-const Spinner = MockSpinner;
-const Modal = MockModal;
-const Tabs = MockTabs;
-const TabItem = MockTabItem;
-const Icon = MockIcon;
-
-// Mock Service Hooks
-const useAuth = () => ({ isAuthenticated: true });
-const useApi = () => ({
-  fetchData: async (url: string) => {
-    await new Promise(resolve => setTimeout(resolve, 500)); // Simulate network delay
-    if (url.includes('market')) return MOCK_STOCKS;
-    if (url.includes('portfolio')) return MOCK_PORTFOLIO;
-    if (url.includes('watchlist')) return MOCK_WATCHLIST;
-    return {};
-  },
-  postData: async (url: string, data: any) => {
-    await new Promise(resolve => setTimeout(resolve, 300)); // Simulate network delay
-    console.log(`Mock API POST to ${url} with data:`, data);
-    return { success: true, message: 'Operation successful' };
-  }
-});
-const useNotification = () => ({
-  notify: (type: 'success' | 'error' | 'info', message: string) => console.log(`[${type.toUpperCase()}] Notification: ${message}`)
-});
-
-
 export default StockTradingScreen;
-
-// Approximate lines of code: 350 (including types, mocks, and component logic)

@@ -13,9 +13,9 @@ from enum import Enum
 import aiohttp
 from decimal import Decimal
 
-from ..database.models import User, Account, Transaction
-from ..database.connection import get_db_session
-from ..config.settings import settings
+from database.models import User, Account, Transaction
+from database.connection import get_db_session
+from config.settings import settings
 from .notification_service import send_transaction_alert
 
 logger = logging.getLogger(__name__)

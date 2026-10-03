@@ -14,12 +14,12 @@ import (
 )
 
 type AccountsHandler struct {
-	db        *database.InMemoryDB
+	db        database.Store
 	cfg       *config.Config
 	publisher *kafka.EventPublisher
 }
 
-func NewAccountsHandler(db *database.InMemoryDB, cfg *config.Config) *AccountsHandler {
+func NewAccountsHandler(db database.Store, cfg *config.Config) *AccountsHandler {
 	return &AccountsHandler{
 		db:        db,
 		cfg:       cfg,

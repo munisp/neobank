@@ -6,11 +6,34 @@ Implements hybrid rule-based + ML/DL/GNN approach as recommended
 
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, GATConv, SAGEConv, global_mean_pool
-from torch_geometric.data import Data, Batch
+
+# Heavy ML deps are lazy-loaded (see _ensure_ml_deps) so the API boots on
+# slim CPU images without torch/torch_geometric installed.
+torch = None
+nn = None
+F = None
+GCNConv = GATConv = SAGEConv = global_mean_pool = None
+Data = Batch = None
+
+
+def _ensure_ml_deps():
+    global torch, nn, F, GCNConv, GATConv, SAGEConv, global_mean_pool, Data, Batch
+    if torch is not None:
+        return True
+    try:
+        import torch as _torch
+        import torch.nn as _nn
+        import torch.nn.functional as _F
+        from torch_geometric.nn import (GCNConv as _GCN, GATConv as _GAT,
+                                        SAGEConv as _SAGE, global_mean_pool as _gmp)
+        from torch_geometric.data import Data as _Data, Batch as _Batch
+        torch, nn, F = _torch, _nn, _F
+        GCNConv, GATConv, SAGEConv, global_mean_pool = _GCN, _GAT, _SAGE, _gmp
+        Data, Batch = _Data, _Batch
+        return True
+    except ImportError:
+        return False
+
 import networkx as nx
 from typing import Dict, List, Any, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
@@ -27,8 +50,8 @@ from sklearn.metrics import classification_report, confusion_matrix
 import joblib
 import redis
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..database.models import Transaction, User, Account
-from ..config.settings import settings
+from database.models import Transaction, User, Account
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +90,13 @@ class GraphFeatures:
     network_density: float
     shortest_path_length: float
 
-class EnhancedGNNFraudModel(nn.Module):
+if nn is not None:
+    _GNNBase = nn.Module
+else:
+    _GNNBase = object
+
+
+class EnhancedGNNFraudModel(_GNNBase):
     """
     Enhanced Graph Neural Network for Fraud Detection
     Achieves 98% accuracy through advanced architecture and ensemble methods

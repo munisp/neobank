@@ -418,3 +418,45 @@ export class NotificationService {
 }
 
 export default NotificationService;
+
+// ---------------------------------------------------------------------------
+// Module-level namespace API
+// Pages use `import * as NotificationService from '../services/NotificationService'`;
+// these named exports make the static class members reachable on the namespace.
+// ---------------------------------------------------------------------------
+const _Notify = NotificationService;
+
+export const initialize = _Notify.initialize.bind(_Notify);
+export const requestPermission = _Notify.requestPermission.bind(_Notify);
+export const showNotification = _Notify.showNotification.bind(_Notify);
+export const markAsRead = _Notify.markAsRead.bind(_Notify);
+export const markAllAsRead = _Notify.markAllAsRead.bind(_Notify);
+export const deleteNotification = _Notify.deleteNotification.bind(_Notify);
+export const getUnreadCount = _Notify.getUnreadCount.bind(_Notify);
+export const getNotifications = _Notify.getAllNotifications.bind(_Notify);
+export const getAllNotifications = _Notify.getAllNotifications.bind(_Notify);
+
+export async function deleteAllReadNotifications() {
+  const all = (await _Notify.getAllNotifications()) || [];
+  const read = all.filter((n) => n.read || n.is_read);
+  await Promise.all(read.map((n) => _Notify.deleteNotification(n.id)));
+  return read.length;
+}
+
+// Lightweight toast bus: NotificationProvider listens for `app:toast`.
+export function notify(message, type = 'info', title) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('app:toast', { detail: { message, type, title } })
+    );
+  }
+}
+
+export const showToast = notify;
+export const success = (message, title) => notify(message, 'success', title);
+export const showSuccess = success;
+export const error = (message, title) => notify(message, 'error', title);
+export const showError = error;
+export const info = (message, title) => notify(message, 'info', title);
+export const warn = (message, title) => notify(message, 'warning', title);
+export const warning = warn;

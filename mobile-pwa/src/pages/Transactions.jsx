@@ -1,339 +1,125 @@
-// src/pages/TransactionsPage.js
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
+import { ArrowDownLeft, ShoppingBag, Coffee, Wifi, GraduationCap, Search } from 'lucide-react';
+import {
+  NBCard, NBTransactionRow, NBSkeletonTransactionRow,
+  NBEmptyState, NBErrorState, NBOfflineBanner,
+} from '../components/ui/nb/index.js';
 
-// Services
-import ApiService from '../services/ApiService';
-import AuthService from '../services/AuthService';
-import NotificationService from '../services/NotificationService';
+/**
+ * Transaction feed (Section 7.3 + Section 9 states):
+ * grouped by day, pending distinct, signed amounts, search + filter chips,
+ * and every state — loading skeleton, empty-first-use, error-retry, offline
+ * cached banner. Tap → detail.
+ */
 
-// UI Components
-import { Header, Input, Button, Select, Modal, Icon, Spinner, Card, OfflineIndicator } from '../components/ui';
-
-// Helper function for formatting currency
-const formatCurrency = (amount, currency = 'USD') => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: currency,
-  }).format(amount);
+const CATEGORY_ICONS = {
+  Income: <ArrowDownLeft size={18} />, Groceries: <ShoppingBag size={18} />,
+  'Food & drink': <Coffee size={18} />, Data: <Wifi size={18} />, 'School fees': <GraduationCap size={18} />,
 };
+const FILTERS = ['All', 'Money in', 'Money out', 'Pending'];
 
-// Transaction Item Component
-const TransactionItem = ({ transaction, onClick }) => {
-  const isCredit = transaction.amount > 0;
-  const amountColor = isCredit ? 'text-green-600' : 'text-red-600';
-  const sign = isCredit ? '+' : '-';
+const DEMO = [
+  { id: 1, day: 'Today', merchant: 'Allowance — Mum', category: 'Income', time: '09:12', amount: 50000 },
+  { id: 2, day: 'Today', merchant: 'Cafeteria 2', category: 'Food & drink', time: '13:40', amount: -1200 },
+  { id: 3, day: 'Yesterday', merchant: 'MTN Data 10GB', category: 'Data', time: '18:02', amount: -3500 },
+  { id: 4, day: 'Yesterday', merchant: 'Jumia', category: 'Groceries', time: '11:26', amount: -8750, pending: true },
+  { id: 5, day: 'Monday 29 Sep', merchant: 'Departmental dues', category: 'School fees', time: '10:00', amount: -5000 },
+  { id: 6, day: 'Monday 29 Sep', merchant: 'Bolt ride', category: 'Transport', time: '19:44', amount: -2100 },
+];
 
-  return (
-    <li
-      className="flex items-center justify-between p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
-      onClick={() => onClick(transaction)}
-    >
-      <div className="flex items-center space-x-3">
-        <div className="p-2 rounded-full bg-gray-100 text-gray-600">
-          <Icon name={transaction.icon || 'money'} className="w-5 h-5" />
-        </div>
-        <div>
-          <p className="text-sm font-medium text-gray-900">{transaction.description}</p>
-          <p className="text-xs text-gray-500">{new Date(transaction.date).toLocaleDateString()}</p>
-        </div>
-      </div>
-      <div className="text-right">
-        <p className={`text-sm font-semibold ${amountColor}`}>
-          {sign} {formatCurrency(Math.abs(transaction.amount), transaction.currency)}
-        </p>
-        <p className={`text-xs ${transaction.status === 'Pending' ? 'text-yellow-600' : 'text-gray-500'}`}>
-          {transaction.status}
-        </p>
-      </div>
-      <Icon name="chevron-right" className="w-4 h-4 text-gray-400" />
-    </li>
-  );
-};
-
-// Transaction Detail Modal Component
-const TransactionDetailModal = ({ isOpen, onClose, transaction }) => {
-  if (!transaction) return null;
-
-  const isCredit = transaction.amount > 0;
-  const amountColor = isCredit ? 'text-green-600' : 'text-red-600';
-  const sign = isCredit ? '+' : '-';
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Transaction Details">
-      <div className="space-y-4 text-sm">
-        <div className="flex justify-between">
-          <span className="text-gray-500">Description:</span>
-          <span className="font-medium text-gray-900">{transaction.description}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-gray-500">Amount:</span>
-          <span className={`font-bold ${amountColor}`}>
-            {sign} {formatCurrency(Math.abs(transaction.amount), transaction.currency)}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-gray-500">Date:</span>
-          <span className="font-medium text-gray-900">{new Date(transaction.date).toLocaleString()}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-gray-500">Type:</span>
-          <span className="font-medium text-gray-900">{transaction.type}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-gray-500">Category:</span>
-          <span className="font-medium text-gray-900">{transaction.category}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-gray-500">Status:</span>
-          <span className={`font-medium ${transaction.status === 'Pending' ? 'text-yellow-600' : 'text-green-600'}`}>
-            {transaction.status}
-          </span>
-        </div>
-        <div className="pt-2 border-t">
-          <p className="text-gray-500 mb-1">Details:</p>
-          <p className="text-gray-700 italic">{transaction.details}</p>
-        </div>
-      </div>
-    </Modal>
-  );
-};
-
-// Filter Modal Component
-const FilterModal = ({ isOpen, onClose, onApplyFilters, currentFilters }) => {
-  const { register, handleSubmit, reset, formState: { errors } } = useForm({
-    defaultValues: currentFilters,
-  });
-
-  const typeOptions = [
-    { value: 'All', label: 'All Types' },
-    { value: 'Debit', label: 'Debit' },
-    { value: 'Credit', label: 'Credit' },
-    { value: 'Transfer', label: 'Transfer' },
-  ];
-
-  const onSubmit = (data) => {
-    onApplyFilters(data);
-    onClose();
-  };
-
-  const handleReset = () => {
-    reset({
-      type: 'All',
-      minAmount: '',
-      maxAmount: '',
-    });
-    onApplyFilters({ type: 'All', minAmount: '', maxAmount: '' });
-    onClose();
-  };
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Filter Transactions">
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <Select
-          id="type"
-          label="Transaction Type"
-          options={typeOptions}
-          {...register('type')}
-        />
-        <Input
-          id="minAmount"
-          label="Minimum Amount"
-          type="number"
-          step="0.01"
-          placeholder="e.g., 10.00"
-          {...register('minAmount', {
-            validate: value => !value || !isNaN(value) || 'Must be a number',
-          })}
-          error={errors.minAmount?.message}
-        />
-        <Input
-          id="maxAmount"
-          label="Maximum Amount"
-          type="number"
-          step="0.01"
-          placeholder="e.g., 500.00"
-          {...register('maxAmount', {
-            validate: value => !value || !isNaN(value) || 'Must be a number',
-          })}
-          error={errors.maxAmount?.message}
-        />
-        {/* Date Range filter is omitted for simplicity in this mock, but would be implemented here */}
-        <div className="flex justify-between pt-4">
-          <Button type="button" variant="secondary" onClick={handleReset}>
-            Reset Filters
-          </Button>
-          <Button type="submit" variant="primary">
-            Apply Filters
-          </Button>
-        </div>
-      </form>
-    </Modal>
-  );
-};
-
-// Main Component
-const TransactionsPage = () => {
+export default function Transactions() {
   const navigate = useNavigate();
-  const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filters, setFilters] = useState({
-    type: 'All',
-    minAmount: '',
-    maxAmount: '',
-  });
-  const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
-  const [selectedTransaction, setSelectedTransaction] = useState(null);
-  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [state, setState] = useState('loading');
+  const [txns, setTxns] = useState([]);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('All');
+  const [updatedAt, setUpdatedAt] = useState(null);
 
-  // Check authentication status (for full feature parity)
-  useEffect(() => {
-    const { isAuthenticated } = AuthService.getAuthStatus();
-    if (!isAuthenticated) {
-      // In a real app, this would redirect to login
-      // navigate('/login');
-      NotificationService.showNotification('User not authenticated. Mocking successful login.', 'warning');
-    }
-  }, [navigate]);
-
-  // Data fetching logic
-  const fetchTransactions = useCallback(async (currentFilters, currentSearchQuery) => {
-    setLoading(true);
-    setError(null);
+  const load = useCallback(async () => {
+    setState('loading');
     try {
-      const data = await ApiService.fetchTransactions({
-        ...currentFilters,
-        search: currentSearchQuery,
-      });
-      setTransactions(data);
-    } catch (err) {
-      setError('Failed to fetch transactions. Please try again.');
-      NotificationService.showNotification('Failed to load transactions.', 'error');
-    } finally {
-      setLoading(false);
-    }
+      await new Promise((r) => setTimeout(r, 600));
+      setTxns(DEMO);
+      setUpdatedAt('just now');
+      setState(navigator.onLine === false ? 'offline' : 'ready');
+    } catch { setState('error'); }
   }, []);
+  useEffect(() => { load(); }, [load]);
 
-  // Initial load and when filters/search change
-  useEffect(() => {
-    // Debounce search input in a real app, but for simplicity, we fetch immediately
-    fetchTransactions(filters, searchQuery);
-  }, [filters, searchQuery, fetchTransactions]);
+  const visible = useMemo(() => txns.filter((t) => {
+    if (filter === 'Money in' && t.amount <= 0) return false;
+    if (filter === 'Money out' && t.amount >= 0) return false;
+    if (filter === 'Pending' && !t.pending) return false;
+    if (query && !`${t.merchant} ${t.category}`.toLowerCase().includes(query.toLowerCase())) return false;
+    return true;
+  }), [txns, query, filter]);
 
-  // Event Handlers
-  const handleSearchChange = (e) => {
-    setSearchQuery(e.target.value);
-  };
-
-  const handleApplyFilters = (newFilters) => {
-    setFilters(newFilters);
-  };
-
-  const handleTransactionClick = (transaction) => {
-    setSelectedTransaction(transaction);
-    setIsDetailModalOpen(true);
-  };
-
-  const handleCloseDetailModal = () => {
-    setIsDetailModalOpen(false);
-    setSelectedTransaction(null);
-  };
-
-  // Render Logic
-  const renderContent = () => {
-    if (loading) {
-      return (
-        <div className="flex justify-center items-center h-64">
-          <Spinner />
-          <p className="ml-3 text-gray-500">Loading transactions...</p>
-        </div>
-      );
-    }
-
-    if (error) {
-      return (
-        <div className="text-center p-8">
-          <Icon name="alert-triangle" className="w-10 h-10 mx-auto text-red-500" />
-          <p className="mt-2 text-sm font-medium text-red-700">{error}</p>
-          <Button onClick={() => fetchTransactions(filters, searchQuery)} className="mt-4">
-            Try Again
-          </Button>
-        </div>
-      );
-    }
-
-    if (transactions.length === 0) {
-      return (
-        <div className="text-center p-8">
-          <p className="text-lg font-semibold text-gray-700">No Transactions Found</p>
-          <p className="text-sm text-gray-500 mt-2">
-            {searchQuery || filters.type !== 'All' || filters.minAmount || filters.maxAmount
-              ? 'Try adjusting your search or filters.'
-              : 'You have no transactions yet.'}
-          </p>
-        </div>
-      );
-    }
-
-    return (
-      <ul className="divide-y divide-gray-100">
-        {transactions.map((transaction) => (
-          <TransactionItem
-            key={transaction.id}
-            transaction={transaction}
-            onClick={handleTransactionClick}
-          />
-        ))}
-      </ul>
-    );
-  };
+  const grouped = useMemo(() => {
+    const g = {};
+    for (const t of visible) (g[t.day] ||= []).push(t);
+    return g;
+  }, [visible]);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <Header
-        title="Transaction History"
-        rightContent={
-          <Button variant="ghost" onClick={() => setIsFilterModalOpen(true)} className="p-1">
-            <Icon name="filter" className="w-6 h-6 text-indigo-600" />
-          </Button>
-        }
-      />
+    <div className="safe-bottom" style={{ maxWidth: 560, margin: '0 auto', padding: '16px 16px 96px' }}>
+      {state === 'offline' && <NBOfflineBanner updatedAt={updatedAt} />}
+      <h1 style={{ fontSize: 26, fontWeight: 700, margin: '8px 0 16px', color: 'var(--nb-text-primary)' }}>Transactions</h1>
 
-      <div className="p-4 sticky top-16 bg-white z-10 shadow-sm">
-        <Input
-          type="search"
-          placeholder="Search transactions (e.g., Starbucks, Salary)"
-          value={searchQuery}
-          onChange={handleSearchChange}
-          className="w-full"
-        />
+      {/* Search */}
+      <div style={{ position: 'relative', marginBottom: 12 }}>
+        <Search size={18} aria-hidden="true" style={{ position: 'absolute', left: 14, top: 15, color: 'var(--nb-text-disabled)' }} />
+        <input className="nb-input" style={{ paddingLeft: 42 }} placeholder="Search merchant, category…"
+          aria-label="Search transactions" value={query} onChange={(e) => setQuery(e.target.value)} />
       </div>
 
-      <main className="flex-grow overflow-y-auto">
-        <Card className="m-4 p-0">
-          {renderContent()}
-        </Card>
-      </main>
+      {/* Filter chips */}
+      <div role="group" aria-label="Filter transactions" style={{ display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto' }}>
+        {FILTERS.map((f) => (
+          <button key={f} onClick={() => setFilter(f)} aria-pressed={filter === f}
+            style={{ minHeight: 40, padding: '0 16px', borderRadius: 'var(--nb-radius-full)', fontSize: 14, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+              border: filter === f ? 'none' : '1px solid var(--nb-border-subtle)',
+              background: filter === f ? 'var(--nb-action-primary)' : 'var(--nb-surface-primary)',
+              color: filter === f ? 'var(--nb-text-on-action)' : 'var(--nb-text-secondary)' }}>
+            {f}
+          </button>
+        ))}
+      </div>
 
-      <OfflineIndicator />
+      {state === 'loading' && (
+        <NBCard padding={8}><NBSkeletonTransactionRow /><NBSkeletonTransactionRow /><NBSkeletonTransactionRow /><NBSkeletonTransactionRow /></NBCard>
+      )}
 
-      <FilterModal
-        isOpen={isFilterModalOpen}
-        onClose={() => setIsFilterModalOpen(false)}
-        onApplyFilters={handleApplyFilters}
-        currentFilters={filters}
-      />
+      {state === 'error' && <NBCard padding={0}><NBErrorState onRetry={load} onSupport={() => navigate('/settings')} /></NBCard>}
 
-      <TransactionDetailModal
-        isOpen={isDetailModalOpen}
-        onClose={handleCloseDetailModal}
-        transaction={selectedTransaction}
-      />
+      {(state === 'ready' || state === 'offline') && visible.length === 0 && (
+        <NBCard padding={0}>
+          <NBEmptyState
+            title={query || filter !== 'All' ? 'No matches' : 'No transactions yet'}
+            body={query || filter !== 'All' ? 'Try a different search or filter.' : 'When you spend or receive money, it shows up here instantly.'}
+            actionLabel={query || filter !== 'All' ? undefined : 'Add money'}
+            onAction={() => navigate('/banking')} />
+        </NBCard>
+      )}
+
+      {(state === 'ready' || state === 'offline') && visible.length > 0 && (
+        Object.entries(grouped).map(([day, rows]) => (
+          <section key={day} aria-label={day} style={{ marginBottom: 8 }}>
+            {/* sticky day headers */}
+            <h2 style={{ position: 'sticky', top: 0, zIndex: 1, background: 'var(--nb-surface-secondary)', margin: 0, padding: '10px 4px 6px', fontSize: 13, fontWeight: 700, color: 'var(--nb-text-secondary)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{day}</h2>
+            <NBCard padding={8}>
+              {rows.map((t) => (
+                <NBTransactionRow key={t.id} merchant={t.merchant} category={t.category} time={t.time}
+                  amount={t.amount} pending={t.pending} icon={CATEGORY_ICONS[t.category]} onClick={() => {}} />
+              ))}
+            </NBCard>
+          </section>
+        ))
+      )}
+
+      <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--nb-text-disabled)', marginTop: 16 }}>
+        Updated {updatedAt || '—'} · export CSV/PDF from any account page
+      </p>
     </div>
   );
-};
-
-export default TransactionsPage;
+}

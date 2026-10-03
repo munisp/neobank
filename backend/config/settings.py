@@ -105,6 +105,54 @@ class Settings(BaseSettings):
         case_sensitive = True
 
 
+    # --- Integration endpoints (audit wave: added missing attrs) ---
+    OPA_URL: str = "http://localhost:8181"
+    PERMIFY_URL: str = "localhost:3478"
+    JAEGER_AGENT_HOST: str = "localhost"
+    JAEGER_AGENT_PORT: int = 6831
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4317"
+
+    # Notifications
+    SMS_API_KEY: str = ""
+    SMS_SENDER_ID: str = "NeoBank"
+    WHATSAPP_API_KEY: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    FCM_SERVER_KEY: str = ""
+    APNS_KEY_ID: str = ""
+    APNS_TEAM_ID: str = ""
+    FROM_EMAIL: str = "no-reply@neobank.ng"
+    FROM_NAME: str = "NeoBank"
+    SMTP_SERVER: str = "localhost"
+    SMTP_USERNAME: str = ""
+
+    # Bill payment providers
+    AIRTIME_API_KEY: str = ""
+    CABLE_TV_API_KEY: str = ""
+    ELECTRICITY_API_KEY: str = ""
+
+    # KYC vendors
+    BALLERINE_API_KEY: str = ""
+    BALLERINE_API_URL: str = "https://api.ballerine.io"
+    GOT_OCR_API_URL: str = ""
+    OLMOCR_API_URL: str = ""
+
+    # --- Identity verification (self-hosted OpenKYC replacement) ---
+    IDV_API_KEYS: str = ""  # comma-separated API keys for the /idv endpoints
+    IDV_SESSION_SITE_URL: str = "http://localhost:3000/idv"
+    IDV_OCR_LANG: str = "en"
+    IDV_VLM_API_URL: str = ""  # OpenAI-compatible endpoint, e.g. http://localhost:8000
+    IDV_VLM_API_KEY: str = ""
+    IDV_VLM_MODEL: str = "Qwen/Qwen2-VL-7B-Instruct"
+    IDV_VLM_TIMEOUT: float = 30.0
+    IDV_FACE_API_URL: str = ""  # optional FaceOnLive-compatible biometrics service
+    IDV_FACE_API_KEY: str = ""
+    IDV_FACE_TIMEOUT: float = 15.0
+    IDV_FACE_MATCH_THRESHOLD: float = 0.6
+    IDV_WEBHOOK_URL: str = ""
+    IDV_WEBHOOK_SECRET: str = ""
+    IDV_WEBHOOK_ENABLED: bool = False
+
+
 class DevelopmentSettings(Settings):
     """Development environment settings"""
     DEBUG: bool = True

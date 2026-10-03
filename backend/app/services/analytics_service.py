@@ -13,9 +13,9 @@ import numpy as np
 from sqlalchemy import text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database.models import User, Account, Transaction, KYCDocument
-from ..database.connection import get_db_session
-from ..config.settings import settings
+from database.models import User, Account, Transaction, KYCDocument
+from database.connection import get_db_session
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 

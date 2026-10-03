@@ -1,0 +1,22 @@
+{
+  "index_patterns": ["transactions-*", "app-logs-*"],
+  "template": {
+    "settings": {
+      "number_of_shards": 3,
+      "number_of_replicas": 1,
+      "refresh_interval": "30s",
+      "codec": "best_compression",
+      "translog.durability": "async",
+      "translog.sync_interval": "30s"
+    },
+    "mappings": {
+      "properties": {
+        "timestamp": { "type": "date" },
+        "account_id": { "type": "keyword" },
+        "amount": { "type": "double" },
+        "fraud_score": { "type": "float" },
+        "message": { "type": "text", "norms": false }
+      }
+    }
+  }
+}

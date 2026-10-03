@@ -1,0 +1,22 @@
+# OpenSearch 2.x — logs/analytics + vector search for NeoBank
+cluster.name: neobank-search
+node.name: ${HOSTNAME}
+discovery.seed_hosts: ["opensearch-0", "opensearch-1", "opensearch-2"]
+cluster.initial_master_nodes: ["opensearch-0"]
+
+# Heap: set via OPENSEARCH_JAVA_OPTS="-Xms8g -Xmx8g" (50% RAM, max 31G)
+
+# Indexing throughput for transaction/log ingest
+indices.memory.index_buffer_size: 20%
+indices.fielddata.cache.size: 30%
+indices.requests.cache.size: 3%
+thread_pool.write.queue_size: 2000
+thread_pool.search.queue_size: 2000
+
+# Refresh: logs don't need 1s visibility
+index.refresh_interval: 30s
+
+# Snapshots to lakehouse S3
+path.repo: ["/mnt/snapshots"]
+
+plugins.security.disabled: false

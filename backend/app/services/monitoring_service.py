@@ -9,10 +9,10 @@ from prometheus_client import Counter, Gauge, Histogram, Summary, start_http_ser
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.exporter.jaeger.thrift import JaegerExporter
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-from ..config.settings import settings
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +75,12 @@ class MonitoringService:
         trace.set_tracer_provider(TracerProvider())
         self.tracer = trace.get_tracer(__name__)
 
-        jaeger_exporter = JaegerExporter(
-            agent_host_name=settings.JAEGER_AGENT_HOST or "localhost",
-            agent_port=settings.JAEGER_AGENT_PORT or 6831,
-        )
+        # Jaeger >= 1.35 ingests OTLP natively on :4317
+        otlp_endpoint = getattr(settings, "OTEL_EXPORTER_OTLP_ENDPOINT", None) or "http://localhost:4317"
+        otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
 
         trace.get_tracer_provider().add_span_processor(
-            BatchSpanProcessor(jaeger_exporter)
+            BatchSpanProcessor(otlp_exporter)
         )
 
     def get_tracer(self):

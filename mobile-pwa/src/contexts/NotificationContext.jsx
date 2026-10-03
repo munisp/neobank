@@ -24,10 +24,14 @@ export const NotificationProvider = ({ children }) => {
       navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
     }
 
+    // In-app toast bus (NotificationService.notify / success / error / ...)
+    window.addEventListener('app:toast', handleAppToast);
+
     return () => {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
       }
+      window.removeEventListener('app:toast', handleAppToast);
     };
   }, []);
 
@@ -50,6 +54,16 @@ export const NotificationProvider = ({ children }) => {
     if (event.data && event.data.type === 'NOTIFICATION_RECEIVED') {
       addNotification(event.data.notification);
     }
+  };
+
+  const handleAppToast = (event) => {
+    const { message, type, title } = event.detail || {};
+    if (!message) return;
+    addNotification({
+      title: title || (type === 'error' ? 'Error' : type === 'success' ? 'Success' : 'Notice'),
+      message,
+      type: type || 'info',
+    });
   };
 
   const addNotification = (notification) => {

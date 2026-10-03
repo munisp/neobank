@@ -13,7 +13,7 @@ from app.services.secure_qr_service import SecureQRService, QRCodeType
 from app.dependencies import get_qr_service
 
 
-router = APIRouter(prefix="/api/qr", tags=["qr"])
+router = APIRouter(prefix="/qr", tags=["qr"])
 
 
 # Request Models

@@ -1,0 +1,107 @@
+# Caddy — NeoBank edge: TLS termination, WAF hand-off, IdP forward-auth
+#
+# Topology:
+#   Internet → Caddy (TLS, HTTP/3, compression, WAF via OpenAppSec,
+#             forward-auth via Keycloak) → APISIX (routing, rate limits,
+#             API keys, consumer auth) → backend services
+#
+# Caddy complements rather than replaces APISIX: Caddy is the L4/L7 edge
+# (certificates, protocol optimization, WAF), APISIX is the API gateway
+# (per-route policy, consumers, observability).
+
+{
+	admin off
+	auto_https disable_redirects   # TLS handled per-site below
+	servers {
+		protocols h1 h2 h3           # HTTP/3 (QUIC) — big mobile win on lossy networks
+		max_header_size 1MB
+		timeouts {
+			read_body 15s
+			read_header 10s
+			idle 120s
+		}
+	}
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MB
+			roll_keep 5
+		}
+		format json                  # shipped to OpenSearch by vector/fluent-bit
+	}
+}
+
+api.neobank.ng {
+	tls ops@neobank.ng {
+		protocols tls1.2 tls1.3
+	}
+
+	# OpenAppSec Nano-Agent: inline WAF inspection before anything reaches
+	# APISIX. Agent attached via reverse_proxy trusted_proxies + header check.
+	@blocked header X-OpenAppSec-Verdict "block"
+	abort @blocked
+
+	encode zstd gzip
+
+	# Keycloak forward-auth for admin/console surfaces (OIDC)
+	# Public API endpoints (with APISIX consumer keys) skip this.
+	@console path /console/* /admin/*
+	forward_auth @console http://keycloak-gatekeeper:4180 {
+		uri /oauth2/auth
+		copy_headers Authorization X-Auth-Request-User X-Auth-Request-Email
+	}
+
+	# Long-lived connections for websockets (notifications)
+	@websockets {
+		path /ws/*
+		header Connection *Upgrade*
+	}
+	reverse_proxy @websockets http://backend:8000 {
+		transport http {
+			versions 1.1
+		}
+	}
+
+	# Everything else → APISIX gateway
+	reverse_proxy http://apisix:9080 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto https
+		transport http {
+			keepalive 60s
+			keepalive_idle_conns 64
+			keepalive_idle_conns_per_host 32
+			versions h2c 1.1
+		}
+		lb_policy least_conn
+		health_uri /apisix/status
+		health_interval 10s
+		health_timeout 3s
+		fail_duration 30s
+		max_fails 3
+	}
+
+	# Static cache headers for any passthrough assets
+	@static path *.js *.css *.woff2 *.png *.webp
+	header @static Cache-Control "public, max-age=31536000, immutable"
+
+	header {
+		-Server
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}
+
+app.neobank.ng {
+	# PWA / web frontends — static hosting + API passthrough
+	tls ops@neobank.ng
+	root * /srv/pwa
+	encode zstd gzip
+
+	handle /api/* {
+		reverse_proxy http://apisix:9080
+	}
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

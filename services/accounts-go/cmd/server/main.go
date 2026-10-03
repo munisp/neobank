@@ -26,11 +26,14 @@ func main() {
 	if databaseURL == "" && environment == "production" {
 		log.Fatal("DATABASE_URL is required in production environment")
 	}
-	if databaseURL == "" {
-		log.Println("WARNING: Using in-memory database (not for production use)")
+
+	db, err := database.NewStore(context.Background(), databaseURL)
+	if err != nil {
+		// NewStore returns a usable in-memory store alongside a warning-level
+		// error when DATABASE_URL is empty (dev/test only).
+		log.Println("store selection:", err)
 	}
-	
-	db := database.NewInMemoryDB()
+	defer db.Close(context.Background())
 	accountsHandler := handlers.NewAccountsHandler(db, cfg)
 
 	gin.SetMode(gin.ReleaseMode)

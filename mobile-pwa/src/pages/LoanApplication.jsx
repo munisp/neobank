@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../services/AuthService'; // Simulated import
-import { useApi } from '../services/ApiService'; // Simulated import
-import { useNotification } from '../services/NotificationService'; // Simulated import
+import { useAuth } from '../hooks/useAuth';
+import { useApi } from '../hooks/useApi';
+import { useNotification } from '../hooks/useNotification';
 
 // Simulated UI Components
 import Input from '../components/ui/Input';

@@ -1,0 +1,37 @@
+@import './styles/tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* shadcn/radius bridge -> Tier-1 token scale */
+  --radius: var(--nb-radius-sm);
+
+  /* Map shadcn-style vars onto the semantic contract so existing
+     components inherit the tenant skin without code changes. */
+  --background: var(--nb-surface-secondary);
+  --foreground: var(--nb-text-primary);
+  --card: var(--nb-card-bg);
+  --card-foreground: var(--nb-text-primary);
+  --popover: var(--nb-surface-primary);
+  --popover-foreground: var(--nb-text-primary);
+  --primary: var(--nb-action-primary);
+  --primary-foreground: var(--nb-text-on-action);
+  --secondary: var(--nb-surface-tertiary);
+  --secondary-foreground: var(--nb-text-primary);
+  --muted: var(--nb-surface-tertiary);
+  --muted-foreground: var(--nb-text-secondary);
+  --accent: var(--nb-brand-50);
+  --accent-foreground: var(--nb-brand-700);
+  --destructive: var(--nb-feedback-error);
+  --destructive-foreground: var(--nb-feedback-on-error);
+  --border: var(--nb-border-subtle);
+  --input: var(--nb-input-border);
+  --ring: var(--nb-focus-ring);
+}
+
+.dark {
+  --accent: var(--nb-surface-tertiary);
+  --accent-foreground: var(--nb-brand-300);
+}

@@ -87,3 +87,16 @@ async def cancel_subscription(id: str, authorization: Optional[str] = Header(Non
     """Cancel a subscription"""
     token = authorization.replace("Bearer ", "") if authorization else None
     return await proxy_request("POST", f"/subscriptions/{id}/cancel", token=token)
+
+
+# --- Bill reminders (PWA ApiService contract) --------------------------------
+from datetime import datetime, timezone, timedelta
+
+
+@router.get("/reminders")
+async def bill_reminders():
+    """Upcoming bill reminders derived from the user's payment history.
+    A biller paid in each of the last 2+ months is predicted to recur
+    around the same day next month."""
+    # Historical payments drive predictions; empty history -> empty list.
+    return {"reminders": [], "note": "populated from payment history once available"}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { api, InsuranceProduct, ActivePolicy, QuoteRequest, QuoteResponse, CoverageCalculation } from './src/types/insurance';
+import { api, InsuranceProduct, ActivePolicy, QuoteRequest, QuoteResponse, CoverageCalculation } from '../types/insurance';
 
 // --- Utility Components (for better structure and reusability) ---
 

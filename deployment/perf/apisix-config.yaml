@@ -1,0 +1,37 @@
+# APISIX 3.x — NeoBank edge gateway tuning
+apisix:
+  node_listen: 9080
+  enable_admin: false                    # standalone + etcd-driven in prod
+  proxy_cache:
+    cache_ttl: 10s
+    zones:
+    - name: disk_cache_one
+      memory_size: 256m
+      disk_size: 2G
+      cache_levels: 1:2
+  http:
+    keepalive_timeout: 75s
+    client_header_timeout: 15s
+    client_body_timeout: 15s
+    send_timeout: 15s
+    lua_shared_dict:
+      prometheus-metrics: 50m
+      plugin-limit-req: 100m
+      plugin-limit-count: 100m
+      lrucache-lock: 10m
+
+nginx_config:
+  worker_processes: auto
+  event:
+    worker_connections: 8192
+  http:
+    enable_access_log: false             # log to OpenSearch via http-logger plugin instead
+    keepalive_requests: 10000
+    gzip: true
+    gzip_types: application/json application/javascript text/css
+
+# Global route defaults applied via plugin metadata:
+#   proxy-rewrite: keepalive upstream pools (backend:8000, pool=64 per worker)
+#   limit-count: 6000 rpm per consumer (Redis-backed via limit-count-redis)
+#   prometheus: /apisix/prometheus/metrics
+#   openappsec-agent: attached via nano-service (see caddy-integration.md)

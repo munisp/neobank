@@ -31,7 +31,13 @@ func main() {
 		log.Println("WARNING: Using in-memory database (not for production use)")
 	}
 	
-	db := database.NewInMemoryDB()
+	db, err := database.NewStore(context.Background(), databaseURL)
+	if err != nil {
+		// NewStore returns a usable in-memory store alongside a warning-level
+		// error when DATABASE_URL is empty (dev/test only).
+		log.Println("store selection:", err)
+	}
+	defer db.Close(context.Background())
 
 	// Initialize handlers
 	kycHandler := handlers.NewKYCHandler(db, cfg)
