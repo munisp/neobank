@@ -68,6 +68,42 @@ const Sidebar = ({ open, onClose, darkMode }) => {
       current: location.pathname === '/investments'
     },
     {
+      name: 'Mortgages',
+      href: '/mortgages',
+      icon: 'home',
+      current: location.pathname === '/mortgages'
+    },
+    {
+      name: 'Savings',
+      href: '/savings',
+      icon: 'piggy-bank',
+      current: location.pathname === '/savings'
+    },
+    {
+      name: 'Rewards',
+      href: '/rewards',
+      icon: 'gift',
+      current: location.pathname === '/rewards'
+    },
+    {
+      name: 'Pay Later',
+      href: '/bnpl',
+      icon: 'calendar-clock',
+      current: location.pathname === '/bnpl'
+    },
+    {
+      name: 'Escrow',
+      href: '/escrow',
+      icon: 'handshake',
+      current: location.pathname === '/escrow'
+    },
+    {
+      name: 'Smart Money',
+      href: '/innovations',
+      icon: 'sparkles',
+      current: location.pathname === '/innovations'
+    },
+    {
       name: 'Cards',
       href: '/cards',
       icon: 'credit-card',

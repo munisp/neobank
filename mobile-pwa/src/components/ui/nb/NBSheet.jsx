@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { X } from 'lucide-react';
+import { SheetMotion } from './motion.jsx';
 
 /**
  * NBSheet — bottom sheet (mobile) / centered dialog (desktop). Top radius 24,
@@ -21,17 +22,19 @@ export function NBSheet({ open, onClose, title, children, hero }) {
       style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'var(--nb-surface-overlay)', animation: 'nb-fade var(--nb-dur-standard) var(--nb-ease-emphasized)' }}
       onClick={(e) => e.target === e.currentTarget && onClose?.()}
     >
-      <style>{`@keyframes nb-fade{from{opacity:0}to{opacity:1}} @keyframes nb-sheet-up{from{transform:translateY(48px);opacity:.6}to{transform:translateY(0);opacity:1}}`}</style>
-      <div
+      <style>{`@keyframes nb-fade{from{opacity:0}to{opacity:1}}`}</style>
+      <SheetMotion
+        onDismiss={onClose}
         className="safe-bottom"
         style={{
           width: '100%', maxWidth: 480, maxHeight: '88vh', overflowY: 'auto',
           background: 'var(--nb-surface-primary)',
           borderRadius: 'var(--nb-sheet-radius) var(--nb-sheet-radius) 0 0',
-          padding: 24, animation: 'nb-sheet-up var(--nb-dur-standard) var(--nb-ease-decelerate)',
+          padding: 24,
           boxShadow: 'var(--nb-elev-5)',
         }}
       >
+        <div style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--nb-border-subtle, rgba(0,0,0,0.12))', margin: '0 auto 12px' }} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--nb-text-primary)' }}>{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', color: 'var(--nb-text-secondary)', cursor: 'pointer', minHeight: 44, minWidth: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -40,7 +43,7 @@ export function NBSheet({ open, onClose, title, children, hero }) {
         </div>
         {hero && <div style={{ textAlign: 'center', fontSize: 34, fontWeight: 700, margin: '8px 0 16px' }} className="tabular">{hero}</div>}
         {children}
-      </div>
+      </SheetMotion>
     </div>
   );
 }

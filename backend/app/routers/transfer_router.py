@@ -6,6 +6,7 @@ API endpoints for transfers using Saga pattern
 from typing import Optional
 from decimal import Decimal
 from uuid import UUID
+from sqlalchemy import select
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, validator
 import structlog
@@ -132,7 +133,8 @@ class SagaStatusResponse(BaseModel):
 async def create_transfer(
     request: TransferRequest,
     current_user: dict = Depends(get_current_user),
-    orchestrator = Depends(get_saga_orchestrator)
+    orchestrator = Depends(get_saga_orchestrator),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create a new transfer
@@ -150,6 +152,31 @@ async def create_transfer(
                    amount=str(request.amount),
                    user_id=current_user["user_id"])
         
+        # KYC step-up gate: tier ceilings, velocity, first-intl, device-change.
+        # Advisory triggers fire-and-notify; hard triggers block the transfer.
+        try:
+            from app.services.kyc_trigger_service import get_kyc_trigger_service
+            from database.models import User as _User
+            import uuid as _uuid
+            db_user = (await db.execute(select(_User).where(
+                _User.id == _uuid.UUID(str(current_user["user_id"]))))).scalar_one_or_none()
+            if db_user is not None:
+                event = ("international_transfer" if str(request.currency).upper() != "NGN"
+                         else "transfer")
+                gate = await get_kyc_trigger_service().check_gate(
+                    db, db_user, event,
+                    {"amount": float(request.amount), "currency": request.currency,
+                     "new_device": bool(getattr(request, "new_device", False))})
+                if not gate["allowed"]:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+                        "error": "kyc_required",
+                        "required_level": gate.get("required_level"),
+                        "triggers": gate.get("triggers"), "route": "/kyc/upgrade"})
+        except HTTPException:
+            raise
+        except Exception as _kyc_exc:  # noqa: BLE001 — never break transfers on gate failure
+            logger.warning("kyc_gate_error", error=str(_kyc_exc))
+
         # Start transfer saga
         saga_id = await orchestrator.start_saga(
             saga_type="transfer",

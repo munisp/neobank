@@ -47,6 +47,30 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
     REDIS_PASSWORD: Optional[str] = None
     
+    # Streaming / Event Backbone
+    # Platform backbone is Kafka (see docker-compose.staging.yml). Fluvio is
+    # used for edge/mobile stream ingestion (offline tx, telemetry — see
+    # deployment/perf/fluvio-tuning.md). RabbitMQ is legacy fallback.
+    KAFKA_BROKERS: str = ""                    # e.g. "kafka:9092"
+    KAFKA_TOPIC_PREFIX: str = "neobank"
+    EVENT_BUS_BACKEND: str = "auto"            # auto | kafka | rabbitmq | memory
+    FLUVIO_ENDPOINT: str = ""                  # e.g. "fluvio:9003"
+
+    # Middleware stack (see docs/uiux-handoff.md "Middleware & infrastructure")
+    KEYCLOAK_URL: str = ""                     # e.g. https://keycloak:8080 (realm/neobank)
+    KEYCLOAK_REALM: str = "neobank"
+    KEYCLOAK_ISSUER: str = ""                  # derived from URL+realm when empty
+    TEMPORAL_HOST: str = ""                    # e.g. temporal:7233
+    TEMPORAL_NAMESPACE: str = "neobank"
+    TEMPORAL_TASK_QUEUE: str = "neobank-workflows"
+    DAPR_HTTP_PORT: int = 3500                 # sidecar
+    DAPR_PUBSUB_NAME: str = "kafka-pubsub"     # Dapr pub/sub component backed by Kafka
+    OPENSEARCH_URL: str = ""                   # e.g. https://opensearch:9200
+    OPENSEARCH_INDEX_PREFIX: str = "neobank"
+    APISIX_ADMIN_URL: str = ""                 # e.g. http://apisix:9180
+    GEOLIBRE_URL: str = ""                     # GeoLibre geospatial service
+    SEDONA_ENABLED: bool = False               # Apache Sedona geo-SQL in lakehouse
+
     # External Services
     TIGERBEETLE_URL: str = "http://localhost:8001"
     KYC_SERVICE_URL: str = "http://localhost:8085"

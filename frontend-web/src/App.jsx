@@ -20,6 +20,7 @@ import NotificationsPage from './pages/NotificationsPage'
 import DesignSystemPage from './pages/DesignSystemPage'
 import TenantBrandingPage from './pages/TenantBrandingPage'
 import SegmentsAdminPage from './pages/SegmentsAdminPage'
+import DeveloperPortalPage from './pages/DeveloperPortalPage'
 import Layout from './components/Layout'
 import './App.css'
 
@@ -96,6 +97,7 @@ function AppRoutes() {
         <Route path="insurance/claims" element={<InsuranceClaimsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="admin/segments" element={<SegmentsAdminPage />} />
+        <Route path="developers" element={<DeveloperPortalPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

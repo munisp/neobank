@@ -50,6 +50,12 @@ import SpendingInsightsScreen from './pages/SpendingInsightsScreen';
 import Onboarding from './pages/Onboarding';
 import SecurityCenter from './pages/SecurityCenter';
 import AppStore from './pages/AppStore';
+import Mortgages from './pages/Mortgages';
+import Savings from './pages/Savings';
+import Rewards from './pages/Rewards';
+import BNPL from './pages/BNPL';
+import Escrow from './pages/Escrow';
+import Innovations from './pages/Innovations';
 
 // Services
 import { AuthService } from './services/AuthService';
@@ -174,6 +180,12 @@ function App() {
                             <Route path="/settings" element={<Settings />} />
                             <Route path="/security" element={<SecurityCenter />} />
                             <Route path="/store" element={<AppStore />} />
+                            <Route path="/mortgages" element={<Mortgages />} />
+                            <Route path="/savings" element={<Savings />} />
+                            <Route path="/rewards" element={<Rewards />} />
+                            <Route path="/bnpl" element={<BNPL />} />
+                            <Route path="/escrow" element={<Escrow />} />
+                            <Route path="/innovations" element={<Innovations />} />
                             <Route path="/notifications" element={<Notifications />} />
                             <Route path="/documents" element={<Documents />} />
                             

@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, UserRound, Building2, BadgeCheck } from 'lucide-react';
+import { ArrowLeft, UserRound, Building2, BadgeCheck } from 'lucide-react';
 import {
-  NBButton, NBInput, NBCard, NBSheet, NBStatusPill,
+  NBButton, NBInput, NBCard, NBSheet, NBStatusPill, SuccessCheck,
 } from '../components/ui/nb/index.js';
 import { Amount } from '../components/ui/Amount.jsx';
 
@@ -180,8 +180,8 @@ export default function Transfers() {
 
       {step === 3 && (
         <section aria-label="Success" style={{ textAlign: 'center', paddingTop: 48 }}>
-          <div aria-hidden="true" style={{ width: 72, height: 72, margin: '0 auto 16px', borderRadius: 'var(--nb-radius-full)', background: 'var(--nb-feedback-success-surface)', color: 'var(--nb-feedback-success)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'nb-sheet-up var(--nb-dur-expressive) var(--nb-ease-decelerate)' }}>
-            <CheckCircle2 size={36} />
+          <div aria-hidden="true" style={{ margin: '0 auto 16px', display: 'flex', justifyContent: 'center', color: 'var(--nb-feedback-success)' }}>
+            <SuccessCheck size={72} />
           </div>
           <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: 'var(--nb-text-primary)' }}>
             {mode === 'request' ? 'Request sent' : 'Money sent'}

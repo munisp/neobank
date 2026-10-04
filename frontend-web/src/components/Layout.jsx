@@ -3,7 +3,8 @@ import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { 
   LayoutDashboard,
   Palette,
-  Users, 
+  Users,
+  Code2, 
   CreditCard, 
   ArrowLeftRight, 
   Send, 
@@ -30,6 +31,7 @@ const navigation = [
   { name: 'Settings', href: '/settings', icon: Settings },
   { name: 'Design System', href: '/design-system', icon: Palette },
   { name: 'Segments & Apps', href: '/admin/segments', icon: Users },
+  { name: 'Developer Portal', href: '/developers', icon: Code2 },
 ]
 
 export default function Layout() {

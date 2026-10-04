@@ -97,3 +97,111 @@ Each is a superset of the previous and verified with
 - App-store analytics: track enroll/launch events per segment.
 - Tenant Brand Pack publish currently writes to localStorage; promote to a
   server-side tenant config endpoint when multi-tenant admin ships.
+
+## Platform expansion (post-Phase-7)
+
+| Capability | Backend | Frontend |
+|---|---|---|
+| Developer platform & vetting | `developer_router.py` — register, draft→submit→approve/reject, API keys (sha256, shown once), scopes, publish-to-store, HMAC webhooks, `verify_api_key`/`require_scope` deps | web `/developers` portal |
+| Settlement engine | `settlement_router.py` — batches, entries, netting, settle (marks entries reconciled); complements existing reconciliation service | admin API |
+| Mortgages w/ payment plans | `mortgage_router.py` — products, EMI amortization quote, apply, admin approve → full schedule, pay installments | mobile `/mortgages` |
+| NGX stock investing | `ngx_router.py` — 10 seeded NGX listings, deterministic daily quotes, buy/sell with fees, portfolio valuation | mobile `/investments` (store tile) |
+| Stablecoins (USDT/USDC) | `stablecoin_router.py` — custodial wallets, NGN ramp in/out w/ daily rate, sends, history | mobile `/crypto` (store tile) |
+| Innovations | `innovation_router.py` — round-ups, subscription radar, salary sorter, money copilot, safe-to-spend | store tiles `/innovations` |
+| Tenant themes server-side | `theme_router.py` (`tenant_themes` table) — publish/fetch brand packs | Tenant Branding page |
+| Segment analytics | `POST /app-store/track`, `GET /admin/segments-analytics` (`segment_events` table) | admin console |
+
+Migration: `007_platform_expansion` (16 tables). All routers mounted at
+`/api/v1` + `/api` following existing conventions.
+
+## Middleware & infrastructure integration
+
+All money-moving features post double-entry transfers to **TigerBeetle**
+and emit domain events onto the **event bus** (RabbitMQ in production,
+in-memory in dev) via `app/services/platform_integration.py`:
+
+| Feature | Ledger posting | Event emitted |
+|---|---|---|
+| NGX order (buy/sell) | user ↔ broker_clearing (Ledger.NGX_BROKERAGE), fee → revenue | `NgxOrderExecuted` |
+| Stablecoin ramp in/out | user ↔ stablecoin_reserve (Ledger.STABLECOIN) | `StablecoinRampIn/Out`, `StablecoinSent` |
+| Mortgage approve | mortgage_pool → user disbursement (Ledger.MORTGAGE) | `MortgageActivated` |
+| Mortgage installment | user → mortgage_pool, interest → revenue | `MortgageInstallmentPaid` |
+| Settlement settle | net position ↔ settlement_clearing (Ledger.PLATFORM_SETTLEMENT) | `SettlementBatchSettled` |
+| Developer publish | — | `DeveloperAppPublished` |
+| Segment enroll | — | `SegmentEnrolled` |
+
+New TB ledgers: NGX_BROKERAGE=40, STABLECOIN=41, MORTGAGE=42,
+PLATFORM_SETTLEMENT=43; new account codes (BROKER_CLEARING,
+STABLECOIN_RESERVE, MORTGAGE_POOL, SETTLEMENT_CLEARING) and transfer codes
+(80–87). System accounts are deterministic u128 mappings, auto-created on
+first use.
+
+Graceful degradation: when TigerBeetle is down or `TIGERBEETLE_DISABLED`,
+postings return {"posted": false, "reason": ...} and never fail the
+business operation — Postgres remains the record and the reconciliation
+engine catches drift. The event bus import of aio_pika is now guarded, so
+the in-memory bus works without the RabbitMQ driver installed.
+
+Reconciliation (existing `reconciliation_service`) already checks
+TigerBeetle↔PostgreSQL consistency; settlement batches sit on top and
+their entries are marked reconciled on settle.
+
+## Full middleware stack integration
+
+| Component | Role | Integration |
+|---|---|---|
+| **Kafka** | Event backbone (primary) | `KafkaEventBus` in event_bus_service — auto-selected when `KAFKA_BROKERS` set; all domain events (`NgxOrderExecuted`, `MortgageActivated`, `SettlementBatchSettled`, `SegmentEnrolled`, `DeveloperAppPublished`…) publish to `neobank.{aggregate}` topics |
+| **Fluvio** | Edge/mobile stream ingestion | `fluvio_client.py` producer — offline transactions stream to `offline-tx-events` (durable acks) from the connectivity queue; telemetry/USSD topics per tuning doc |
+| **Temporal** | Durable workflows | `middleware_adapters.TemporalAdapter` — `MortgageApprovalWorkflow` on apply, `SettlementBatchWorkflow` on settle, `DeveloperVettingWorkflow` SLA on submit |
+| **TigerBeetle** | Double-entry ledger | `platform_integration.py` — all money movement posts transfers (NGX/stablecoin/mortgage/settlement ledgers 40–43) |
+| **Dapr** | Service mesh | `DaprAdapter` — invoke Go/Rust services, pub/sub via Kafka-backed component, state store |
+| **Keycloak** | Federated authN | `KeycloakAdapter` — JWKS token validation (optional path; native JWT remains default) |
+| **Permify** | Fine-grained authZ | existing `permify_service` — wired into developer-app review decisions |
+| **OpenSearch** | Search/analytics | `OpenSearchAdapter` — segment events indexed monthly |
+| **Apache Sedona + GeoLibre** | Geospatial | `GeoAdapter` — nearby agents/branches; Sedona geo-SQL segment heatmaps in lakehouse |
+| **APISIX + OpenAppSec** | Gateway + WAF | `deployment/apisix/routes.yaml` — all new APIs routed with JWT + rate limits; OpenAppSec inspects at the gateway |
+| **Mojaloop** | Interoperability rails | existing DFSP service + MOJALOOP ledgers in TigerBeetle |
+| **Postgres** | System of record | migrations 001–007 |
+| **Redis** | Cache/session | existing client |
+| **Lakehouse** | Analytics sink | `ingest_segment_event` added; existing ingestors for trades/fraud/loans/etc. |
+| **RabbitMQ** | *legacy fallback only* | auto-selected only when Kafka isn't configured |
+
+Observability: `GET /admin/middleware/status` reports live status of every
+component. All adapters degrade gracefully — an unavailable component never
+fails a business operation (Postgres stays the record; recon catches drift).
+
+Go/Rust services consume the same Kafka topics and are invoked through
+Dapr: `ledger-gateway-go` (settlement), `transaction-processor-rs` (core
+processing), `analytics-go` (segment/ML), `investments-go` (NGX).
+
+## On-Par-and-Supersede release (motion + breadth)
+
+### Micro-motion system (mobile-pwa/src/components/ui/nb/motion.jsx)
+- SPRING presets: snappy (500/35), gentle (260/26), bouncy (400/22) — all spring physics, no linear tweens
+- Primitives: MotionPage, Pressable (tap scale + haptic), Stagger/StaggerItem (50ms stagger), SheetMotion (spring entrance + drag-to-dismiss), SuccessCheck (animated SVG draw), useHaptics (navigator.vibrate patterns)
+- Every animation honors prefers-reduced-motion
+- Wired into: NBSheet (drag handle + dismiss), Transfers (animated success), AppStore (staggered cards, pressable tiles), Mortgages (pressable product cards)
+
+### Breadth — 54 product tiles, all deep-linking to REAL routes
+- New surfaces: Savings (vaults/fixed/Ajo-Esusu, savings-go), Rewards (points/tiers/referrals, rewards-go), BNPL (eligibility/split/schedule, bnpl-go), Escrow (protected deals, escrow-go + TigerBeetle holding), Innovations "Smart Money" (round-ups, subscription radar, salary sorter, money copilot, safe-to-spend — /innovations?app=<key>)
+- Routes registered: /savings /rewards /bnpl /escrow /innovations + Sidebar entries
+- Catalog route audit: /bill-payments→/bills, /payments→/bills, /investments/ngx→/investments/stocks, /fx→/transfers?mode=international, /crypto/stablecoins→/investments/crypto — zero 404 deep-links remain
+- Microcopy pass on all new surfaces (plain-language, locally fluent tone)
+
+## Identity & KYC hardening release
+
+### Liveness & anti-deepfake (backend/app/services/idv/liveness.py)
+- Challenge-response: server-signed random 3-action sequence (HMAC-SHA256, session-bound nonce, 120s TTL) — kills pre-recorded/deepfake replay
+- Injection forensics (self-hosted, graceful degradation): static-image replay, inter-frame motion, Laplacian blur/screen-recapture, resolution sanity, missing camera EXIF
+- Passive liveness score via pluggable face API as additive signal (never sole gate)
+- Aggregation: PASS / REVIEW / FAIL with reason codes; hard fails auto-decline, borderline routes to analyst
+- IDV pipeline gate: sessions now require selfie + liveness + face match (selfie vs document, threshold 0.80) before clean IN_REVIEW; fail -> auto-DECLINED + webhook
+- New endpoints: POST /idv/sessions/{id}/liveness/challenge, /liveness/verify; submit accepts selfie_image
+
+### Event-driven KYC triggers (backend/app/services/kyc_trigger_service.py)
+- 13 rules across 4 families: CBN-tier thresholds (single ₦50k/daily ₦50k tier1, ₦500k/₦200k tier2, ₦5m monthly EDD), velocity burst, first international transfer, device-change high-value, product onboarding (NGX/stablecoin/mortgage = tier3, BNPL/loan = tier2), sanctions/PEP (enhanced), fraud/chargeback, dormant reactivation, document expiry
+- check_gate() hard-blocks regulated product actions (403 + kyc_required payload), advisory for threshold/velocity
+- Wired into: transfers, NGX orders, stablecoin ramps, mortgage apply; auto-satisfy on /auth/validate
+- KycTriggerEvent persisted (dedupe open per user+key), Kafka events, user notifications
+- Endpoints: GET /kyc/triggers/catalog, /kyc/triggers/my, /kyc/admin/triggers
+- Migration 008; 13 unit tests passing

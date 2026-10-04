@@ -686,6 +686,12 @@ async def validate_token(credentials: HTTPAuthorizationCredentials = Depends(sec
         user_row = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
         if user_row is not None:
             await segment_service.evaluate_and_enroll(db, user_row)
+            # Close any KYC step-up triggers the user's level now satisfies.
+            try:
+                from app.services.kyc_trigger_service import get_kyc_trigger_service
+                await get_kyc_trigger_service().satisfy_open_triggers(db, user_row)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception as exc:  # noqa: BLE001 — never fail auth on segmentation
         logger.warning("segment evaluation failed", error=str(exc))
 

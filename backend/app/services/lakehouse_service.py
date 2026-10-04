@@ -906,6 +906,23 @@ class LakehouseService:
             logger.error("fraud_event_ingestion_failed", error=str(e))
             return False
     
+    async def ingest_segment_event(self, event: Dict[str, Any]) -> bool:
+        """Ingest a segment app-store event (view/enroll/launch) for
+        segment analytics and geo-segmentation (Sedona)."""
+        try:
+            transformed = [{
+                "event_id": event.get("id"),
+                "user_id": event.get("user_id"),
+                "segment_key": event.get("segment_key"),
+                "app_key": event.get("app_key"),
+                "event": event.get("event"),
+                "occurred_at": event.get("occurred_at", datetime.utcnow()),
+            }]
+            return await self.append_data("segment_events", transformed)
+        except Exception as e:
+            logger.error("segment_event_ingestion_failed", error=str(e))
+            return False
+
     async def ingest_investment_trade(self, trade: Dict[str, Any]) -> bool:
         """Ingest investment trade into Lakehouse"""
         try:

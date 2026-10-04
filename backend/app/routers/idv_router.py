@@ -33,6 +33,7 @@ from app.services.idv import (
     get_idv_pipeline,
 )
 from app.services.idv.biometrics import get_biometrics_client
+from app.services.idv.liveness import get_liveness_service
 from app.services.idv.models import FaceCompareResult, FaceLivenessResult, utcnow
 from app.services.idv.webhooks import get_idv_webhook_service
 from config.settings import settings
@@ -72,6 +73,13 @@ class SessionCreateRequest(BaseModel):
 class SubmitImagesRequest(BaseModel):
     front_image: str = Field(..., description="Base64 (optionally data-URL) encoded front image")
     back_image: Optional[str] = Field(None, description="Base64 encoded back image")
+    selfie_image: Optional[str] = Field(None, description="Base64 encoded selfie for face match + liveness")
+
+
+class LivenessVerifyRequest(BaseModel):
+    challenge: Dict[str, Any] = Field(..., description="Challenge payload returned by /liveness/challenge")
+    frames: list = Field(..., description="Base64 frames captured while performing the challenge")
+    observed_actions: Optional[list] = Field(None, description="Action labels reported by the capture SDK")
 
 
 class ReviewRequest(BaseModel):
@@ -167,6 +175,7 @@ async def submit_images(session_id: UUID, payload: SubmitImagesRequest,
 
     session.front_image_b64 = payload.front_image
     session.back_image_b64 = payload.back_image
+    session.selfie_image_b64 = payload.selfie_image
     session.status = IDVSessionStatus.IN_PROGRESS.value
     session.updated_at = utcnow()
     await db.commit()
@@ -203,8 +212,20 @@ async def process_session(session_id: UUID, db: AsyncSession = Depends(get_db)) 
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"Verification pipeline failed: {exc}")
 
+    # --- Biometric gate: face match (selfie vs document) + liveness decision.
+    # The document pipeline alone is not enough to reach IN_REVIEW clean:
+    # biometrics decide whether the session is clean, flagged, or declined.
+    biometrics = await _evaluate_biometrics(session)
+
     session.result = result.model_dump(mode="json")
-    session.status = IDVSessionStatus.IN_REVIEW.value
+    session.result["biometrics"] = biometrics
+    if biometrics["decision"] == "fail":
+        session.status = IDVSessionStatus.DECLINED.value
+        session.error_message = "Biometric verification failed: " + ", ".join(
+            biometrics.get("reasons") or biometrics.get("deepfake_flags") or ["unknown"])
+    else:
+        # "pass" and "review" both land IN_REVIEW; review carries flags for the analyst.
+        session.status = IDVSessionStatus.IN_REVIEW.value
     session.updated_at = utcnow()
     await db.commit()
 
@@ -212,9 +233,59 @@ async def process_session(session_id: UUID, db: AsyncSession = Depends(get_db)) 
         str(session.id), "verification_completed",
         {"status": session.status,
          "document_valid": result.document_valid,
-         "document_score": result.document_score},
+         "document_score": result.document_score,
+         "biometrics": biometrics.get("decision")},
         db=None)
     return _session_state(session)
+
+
+async def _evaluate_biometrics(session: IDVSession) -> Dict[str, Any]:
+    """Combine the stored liveness decision with selfie-vs-document face match.
+
+    - No selfie submitted -> review (document-only, analyst must decide).
+    - Liveness FAIL recorded -> fail (replay/deepfake risk).
+    - Face match below threshold (when provider configured) -> fail."""
+    from config.settings import settings as _settings
+
+    out: Dict[str, Any] = {"decision": "review", "reasons": []}
+    liveness = (session.biometrics_result or {}).get("liveness")
+    face_match = None
+
+    if not session.selfie_image_b64:
+        out["reasons"].append("no_selfie_submitted")
+        out["liveness"] = liveness
+        return out
+
+    if liveness:
+        out["liveness"] = liveness
+        if liveness.get("status") == "fail":
+            out["decision"] = "fail"
+            out["reasons"].extend(liveness.get("deepfake_flags") or ["liveness_failed"])
+            return out
+    else:
+        out["reasons"].append("liveness_not_completed")
+
+    client = get_biometrics_client()
+    threshold = float(getattr(_settings, "IDV_FACE_MATCH_THRESHOLD", 0.80) or 0.80)
+    if client.available and session.front_image_b64:
+        try:
+            cmp_res = await client.compare_faces(session.selfie_image_b64, session.front_image_b64)
+            score = getattr(cmp_res, "similarity", None) or getattr(cmp_res, "confidence", None)
+            face_match = {"score": score, "threshold": threshold,
+                          "matched": bool(score is not None and score >= threshold)}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("idv_face_compare_failed", error=str(exc))
+            face_match = {"error": str(exc)[:200]}
+        out["face_match"] = face_match
+        if face_match.get("matched") is False:
+            out["decision"] = "fail"
+            out["reasons"].append("face_mismatch")
+            return out
+
+    # Decide: clean pass needs liveness pass (+ face match when available).
+    if liveness and liveness.get("status") == "pass" and (face_match is None or face_match.get("matched", True)):
+        out["decision"] = "pass"
+    return out
 
 
 @router.get("/sessions/{session_id}/result", dependencies=[Depends(require_idv_api_key)])
@@ -248,6 +319,44 @@ async def review_session(session_id: UUID, payload: ReviewRequest,
         {"status": session.status, "reason": payload.reason},
         db=None)
     return _session_state(session)
+
+
+# ---------------------------------------------------------------------------
+# Liveness challenge-response (anti-replay / anti-deepfake)
+# ---------------------------------------------------------------------------
+
+@router.post("/sessions/{session_id}/liveness/challenge",
+             dependencies=[Depends(require_idv_api_key)])
+async def issue_liveness_challenge(session_id: UUID,
+                                   db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Issue a server-signed action challenge bound to this session (120s TTL)."""
+    session = await _get_session(session_id, db)
+    return get_liveness_service().issue_challenge(str(session.id))
+
+
+@router.post("/sessions/{session_id}/liveness/verify",
+             dependencies=[Depends(require_idv_api_key)])
+async def verify_liveness(session_id: UUID, payload: LivenessVerifyRequest,
+                          db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Verify challenge frames: signature/expiry, injection forensics, passive score."""
+    session = await _get_session(session_id, db)
+    if str(payload.challenge.get("session_id")) != str(session.id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Challenge does not belong to this session")
+    decision = await get_liveness_service().evaluate(
+        str(session.id), payload.challenge, payload.frames, payload.observed_actions)
+    bio = session.biometrics_result or {}
+    bio["liveness"] = decision.to_dict()
+    session.biometrics_result = bio
+    if decision.status == "pass" and payload.frames:
+        # Keep the first verified frame as the session selfie when none was submitted.
+        if not session.selfie_image_b64:
+            session.selfie_image_b64 = payload.frames[0]
+    session.updated_at = utcnow()
+    await db.commit()
+    await get_idv_webhook_service().send_notification(
+        str(session.id), "liveness_completed", decision.to_dict(), db=None)
+    return decision.to_dict()
 
 
 # ---------------------------------------------------------------------------

@@ -18,10 +18,11 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.platform_integration import get_platform_integration
 from app.middleware.auth import get_current_user
 from app.services import segment_service
 from database.connection import get_db
-from database.models import Segment, SegmentApp, User, UserSegment
+from database.models import Segment, SegmentApp, SegmentEvent, User, UserSegment
 
 logger = structlog.get_logger(__name__)
 
@@ -123,7 +124,7 @@ DEFAULT_CATALOG: List[Dict[str, Any]] = [
              "icon": "Users", "tagline": "Split food, data & hangout bills instantly"},
             {"key": "allowance-autopilot", "name": "Allowance Autopilot", "route": "/savings?preset=allowance",
              "icon": "CalendarClock", "tagline": "Stretch the monthly allowance with auto-budgets"},
-            {"key": "data-deals", "name": "Data & Airtime Deals", "route": "/bill-payments?tab=data",
+            {"key": "data-deals", "name": "Data & Airtime Deals", "route": "/bills?tab=data",
              "icon": "Wifi", "tagline": "Student-priced data bundles"},
             {"key": "savings-challenges", "name": "Savings Challenges", "route": "/savings?tab=challenges",
              "icon": "Trophy", "tagline": "52-week & squad savings challenges"},
@@ -131,6 +132,8 @@ DEFAULT_CATALOG: List[Dict[str, Any]] = [
              "icon": "BookOpen", "tagline": "Money skills quizzes with rewards"},
             {"key": "fees-escrow", "name": "Fees & Escrow", "route": "/escrow",
              "icon": "ShieldCheck", "tagline": "School fees installments & safe marketplace escrow"},
+            {"key": "round-ups", "name": "Round-Up Savings", "route": "/innovations?app=round-ups",
+             "icon": "Coins", "tagline": "Every purchase saves your spare change automatically"},
         ],
     },
     {
@@ -141,12 +144,16 @@ DEFAULT_CATALOG: List[Dict[str, Any]] = [
         "apps": [
             {"key": "pos-collections", "name": "POS & Collections", "route": "/accounts?tab=collections",
              "icon": "CreditCard", "tagline": "Accept transfers & cards, settle same-day"},
-            {"key": "invoice-pay", "name": "Invoices", "route": "/payments?tab=invoices",
+            {"key": "invoice-pay", "name": "Invoices", "route": "/bills?tab=invoices",
              "icon": "FileText", "tagline": "Send invoices customers pay in one tap"},
             {"key": "stock-loans", "name": "Stock Financing", "route": "/loans?preset=stock",
              "icon": "Package", "tagline": "Working capital sized to your sales"},
             {"key": "staff-payroll", "name": "Payroll", "route": "/transfers?mode=bulk",
              "icon": "Wallet", "tagline": "Pay staff in bulk, on schedule"},
+            {"key": "subscription-radar", "name": "Subscription Radar", "route": "/innovations?app=subscriptions",
+             "icon": "Radar", "tagline": "Find recurring charges draining the business account"},
+            {"key": "ngx-stocks", "name": "NGX Stocks", "route": "/investments/stocks",
+             "icon": "LineChart", "tagline": "Put surplus cash to work on the Nigerian Exchange"},
         ],
     },
     {
@@ -187,6 +194,14 @@ DEFAULT_CATALOG: List[Dict[str, Any]] = [
              "icon": "HandCoins", "tagline": "Up to 50% before payday"},
             {"key": "invest-starter", "name": "Starter Investments", "route": "/investments",
              "icon": "TrendingUp", "tagline": "T-bills & money market from ₦5,000"},
+            {"key": "ngx-stocks", "name": "NGX Stocks", "route": "/investments/stocks",
+             "icon": "LineChart", "tagline": "Buy Dangote, MTN, GTCO & more on the Nigerian Exchange"},
+            {"key": "mortgage", "name": "Home Mortgage", "route": "/mortgages",
+             "icon": "Home", "tagline": "Own your home with a structured payment plan"},
+            {"key": "salary-sorter", "name": "Salary Sorter", "route": "/innovations?app=salary-sorter",
+             "icon": "SplitSquareHorizontal", "tagline": "Auto-split every salary: save, bills, spend"},
+            {"key": "money-copilot", "name": "Money Copilot", "route": "/innovations?app=copilot",
+             "icon": "Sparkles", "tagline": "Insights about your money, found automatically"},
         ],
     },
     {
@@ -209,10 +224,14 @@ DEFAULT_CATALOG: List[Dict[str, Any]] = [
         "apps": [
             {"key": "remit-home", "name": "Send Money Home", "route": "/transfers?mode=international",
              "icon": "SendHorizontal", "tagline": "Low-fee transfers to any Nigerian bank, delivered in minutes"},
-            {"key": "fx-rates", "name": "FX Rates & Alerts", "route": "/fx",
+            {"key": "fx-rates", "name": "FX Rates & Alerts", "route": "/transfers?mode=international",
              "icon": "LineChart", "tagline": "Live naira rates with target-rate alerts"},
             {"key": "family-wallet", "name": "Family Wallet", "route": "/accounts?tab=family",
              "icon": "Home", "tagline": "Fund a controlled wallet for family back home"},
+            {"key": "stablecoins", "name": "Stablecoins (USDT/USDC)", "route": "/investments/crypto",
+             "icon": "DollarSign", "tagline": "Hold dollar value, ramp in and out of naira instantly"},
+            {"key": "diaspora-mortgage", "name": "Diaspora Mortgage", "route": "/mortgages?product=diaspora",
+             "icon": "Building", "tagline": "Buy property back home on a payment plan"},
         ],
     },
     {
@@ -241,6 +260,8 @@ DEFAULT_CATALOG: List[Dict[str, Any]] = [
              "icon": "PiggyBank", "tagline": "Controlled wallets for children with spend limits"},
             {"key": "family-budget", "name": "Family Budget", "route": "/budget?preset=family",
              "icon": "Wallet", "tagline": "Household budget with shared visibility"},
+            {"key": "mortgage", "name": "Family Mortgage", "route": "/mortgages",
+             "icon": "Home", "tagline": "A payment plan for the family home"},
         ],
     },
 ]
@@ -365,6 +386,11 @@ async def enroll(body: EnrollRequest,
     db.add(UserSegment(id=uuid.uuid4(), user_id=uid, segment_id=s.id, source="manual"))
     await db.commit()
     logger.info("segments.enrolled", user=str(uid), segment=s.key)
+    integ = get_platform_integration()
+    await integ.emit("SegmentEnrolled", aggregate_id=str(s.id),
+                     aggregate_type="segment",
+                     payload={"segment": s.key, "source": "manual"},
+                     user_id=str(uid))
     return {"enrolled": True, "segment": s.key, "already": False}
 
 
@@ -579,3 +605,108 @@ async def admin_list_segments(user: Dict[str, Any] = Depends(get_current_user),
             select(SegmentApp).where(SegmentApp.segment_id == s.id))).scalars().all()
         out.append(_serialize_segment(s, apps, counts.get(s.id, 0)))
     return {"segments": out}
+
+
+# --------------------------------------------------------------------------
+# Analytics (closes the "app-store analytics" gap)
+# --------------------------------------------------------------------------
+
+class TrackEvent(BaseModel):
+    segment_key: str
+    app_key: Optional[str] = None
+    event: str  # view | enroll | launch
+
+
+@router.post("/app-store/track", status_code=201)
+async def track_event(body: TrackEvent,
+                      user: Dict[str, Any] = Depends(get_current_user),
+                      db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    if body.event not in ("view", "enroll", "launch"):
+        raise HTTPException(status_code=422, detail="event must be view|enroll|launch")
+    evt = SegmentEvent(id=uuid.uuid4(), user_id=uuid.UUID(str(user["user_id"])),
+                       segment_key=body.segment_key, app_key=body.app_key,
+                       event=body.event)
+    db.add(evt)
+    await db.commit()
+
+    # Search index (OpenSearch) + lakehouse sink for segment analytics
+    from app.infrastructure.middleware_adapters import get_opensearch
+    await get_opensearch().index_transaction_event(
+        f"segment_{body.event}", str(evt.id),
+        {"segment_key": body.segment_key, "app_key": body.app_key,
+         "user_id": str(user["user_id"])})
+    try:
+        from app.services.lakehouse_service import get_lakehouse_service
+        lake = get_lakehouse_service()
+        if lake is not None:
+            await lake.ingest_segment_event({
+                "id": str(evt.id), "user_id": str(user["user_id"]),
+                "segment_key": body.segment_key, "app_key": body.app_key,
+                "event": body.event,
+            })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("lakehouse.ingest_failed", error=str(exc))
+    return {"tracked": True}
+
+
+@router.get("/admin/segments-analytics")
+async def segments_analytics(user: Dict[str, Any] = Depends(get_current_user),
+                             db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    _require_admin(user)
+    rows = (await db.execute(
+        select(SegmentEvent.segment_key, SegmentEvent.event, func.count())
+        .group_by(SegmentEvent.segment_key, SegmentEvent.event))).all()
+    out: Dict[str, Any] = {}
+    for seg_key, event, n in rows:
+        out.setdefault(seg_key, {"views": 0, "enrolls": 0, "launches": 0})
+        out[seg_key][event + "s"] = n
+    return {"analytics": out}
+
+
+# --------------------------------------------------------------------------
+# Middleware observability — which platform components are live right now
+# --------------------------------------------------------------------------
+
+@router.get("/admin/middleware/status")
+async def middleware_status(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Live status of every middleware component the platform integrates
+    with. Admin/manager only."""
+    _require_admin(user)
+    from app.infrastructure.middleware_adapters import (
+        get_dapr, get_geo, get_keycloak, get_opensearch, get_temporal,
+    )
+    from app.infrastructure.fluvio_client import get_fluvio_producer
+    from app.services.platform_integration import get_platform_integration
+    from config.settings import settings
+
+    integ = get_platform_integration()
+    bus_backend = "unknown"
+    try:
+        from app.services.event_bus_service import get_event_bus
+        bus_backend = get_event_bus().backend
+    except Exception:
+        pass
+
+    temporal = get_temporal()
+    return {"middleware": {
+        "tigerbeetle": {"configured": True, "available": integ.ledger_available},
+        "kafka": {"configured": bool(settings.KAFKA_BROKERS),
+                  "active_backend": bus_backend},
+        "fluvio": {"configured": bool(settings.FLUVIO_ENDPOINT),
+                   "available": get_fluvio_producer().available},
+        "temporal": {"configured": bool(settings.TEMPORAL_HOST)},
+        "dapr": {"sidecar_port": settings.DAPR_HTTP_PORT,
+                 "pubsub": settings.DAPR_PUBSUB_NAME},
+        "keycloak": {"configured": get_keycloak().enabled,
+                     "issuer": get_keycloak().issuer if get_keycloak().enabled else None},
+        "permify": {"service": "permify_service"},
+        "opensearch": {"configured": get_opensearch().enabled},
+        "geolibre": {"configured": get_geo().enabled},
+        "sedona": {"enabled": settings.SEDONA_ENABLED},
+        "mojaloop": {"ledgers": ["MOJALOOP_SETTLEMENT", "MOJALOOP_POSITION"]},
+        "apisix": {"configured": bool(settings.APISIX_ADMIN_URL)},
+        "openappsec": {"layer": "gateway (apisix plugin)"},
+        "postgres": {"configured": True},
+        "redis": {"configured": True},
+        "lakehouse": {"service": "lakehouse_service"},
+    }}

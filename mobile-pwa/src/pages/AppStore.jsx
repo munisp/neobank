@@ -8,12 +8,14 @@ import {
   ChevronRight, Check, Plus, LayoutGrid,
   Globe, SendHorizontal, LineChart, Home, Sprout, CalendarDays,
   Tractor, Warehouse, Baby, School, PiggyBank,
+  Coins, SplitSquareHorizontal, Sparkles, DollarSign, Building, Radar, Puzzle,
 } from 'lucide-react';
 import { ApiService } from '../services/ApiService';
 import { NBCard } from '../components/ui/nb';
 import { NBSkeletonCard } from '../components/ui/nb';
 import { NBEmptyState, NBErrorState } from '../components/ui/nb';
 import { NBOfflineBanner } from '../components/ui/nb';
+import { Pressable, Stagger, StaggerItem } from '../components/ui/nb';
 
 // Segment/app icons are stored as lucide names in the catalog — resolve
 // dynamically with a safe fallback.
@@ -24,6 +26,7 @@ const ICONS = {
   MapPin, CalendarCheck, HandCoins, TrendingUp, UsersRound, Lock,
   Globe, SendHorizontal, LineChart, Home, Sprout, CalendarDays,
   Tractor, Warehouse, Baby, School, PiggyBank,
+  Coins, SplitSquareHorizontal, Sparkles, DollarSign, Building, Radar, Puzzle,
 };
 const AppIcon = ({ name, size = 22 }) => {
   const Cmp = ICONS[name] || LayoutGrid;
@@ -38,8 +41,10 @@ const SegmentSection = ({ title, subtitle, segments, onEnroll, enrolling }) => (
         <p className="text-sm" style={{ color: 'var(--nb-text-secondary)' }}>{subtitle}</p>
       )}
     </div>
+    <Stagger className="space-y-4">
     {segments.map((seg, i) => (
-      <NBCard key={seg.key} className="overflow-hidden" padding={0}>
+      <StaggerItem key={seg.key}>
+      <NBCard className="overflow-hidden" padding={0}>
         <div
           className="h-1.5"
           style={{ background: `var(--nb-acct-0${(i % 8) + 1})` }}
@@ -102,17 +107,19 @@ const SegmentSection = ({ title, subtitle, segments, onEnroll, enrolling }) => (
           )}
         </div>
       </NBCard>
+      </StaggerItem>
     ))}
+    </Stagger>
   </section>
 );
 
 const AppTile = ({ app, locked }) => {
   const navigate = useNavigate();
   return (
-    <button
-      type="button"
+    <Pressable
       onClick={() => !locked && navigate(app.route)}
       disabled={locked}
+      haptic={!locked}
       className="flex w-full items-center gap-3 py-3 text-left"
       style={{ minHeight: 56, cursor: locked ? 'not-allowed' : 'pointer', opacity: locked ? 0.55 : 1, background: 'none', border: 'none' }}
       aria-label={locked ? `${app.name} — join this segment to use` : `Open ${app.name}`}
@@ -136,7 +143,7 @@ const AppTile = ({ app, locked }) => {
       {locked
         ? <Lock size={16} style={{ color: 'var(--nb-text-tertiary)' }} aria-hidden="true" />
         : <ChevronRight size={18} style={{ color: 'var(--nb-text-tertiary)' }} aria-hidden="true" />}
-    </button>
+    </Pressable>
   );
 };
 

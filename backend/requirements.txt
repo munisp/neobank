@@ -87,3 +87,10 @@ torch>=2.2
 networkx>=3.2
 joblib>=1.3
 # Optional MLOps (install on training nodes only): mlflow>=2.10, ray[default]>=2.9
+
+# Platform expansion middleware (all optional/lazy-imported)
+aiokafka>=0.10.0          # Kafka event backbone
+temporalio>=1.7.0         # durable workflows (mortgage approval, settlement)
+opensearch-py>=2.5.0      # search/analytics indexing
+# fluvio                  # edge stream ingestion (install in edge images)
+# dapr>=1.13              # service mesh client (HTTP sidecar used by default)

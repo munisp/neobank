@@ -3,7 +3,11 @@ Production KYC Router - Proxies to Go KYC/KYB Service for high performance
 """
 import os
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
+from sqlalchemy import select as _sa_select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.middleware.auth import get_current_user
+from database.connection import get_db
 import httpx
 import structlog
 
@@ -279,3 +283,55 @@ async def kyb_add_ubo(application_id: str, data: Dict[str, Any], request: Reques
 async def kyb_submit(application_id: str, request: Request):
     headers = {"Authorization": request.headers.get("Authorization", "")}
     return await proxy_kyb("POST", f"/applications/{application_id}/submit", headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# Event-driven KYC triggers (self-hosted; not proxied to Go)
+# ---------------------------------------------------------------------------
+
+@router.get("/triggers/catalog")
+async def trigger_catalog() -> Dict[str, Any]:
+    """Public catalog of every event that can trigger a KYC step-up."""
+    from app.services.kyc_trigger_service import TRIGGERS
+    return {"triggers": [
+        {"key": r["key"], "required_level": r["required_level"],
+         "events": sorted(r["events"]), "describe": r["describe"]}
+        for r in TRIGGERS
+    ]}
+
+
+@router.get("/triggers/my")
+async def my_trigger_events(user: Dict[str, Any] = Depends(get_current_user),
+                            db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Current user's open + recent KYC trigger events."""
+    import uuid as _uuid
+    from database.models import KycTriggerEvent
+    uid = _uuid.UUID(str(user["user_id"]))
+    rows = (await db.execute(_sa_select(KycTriggerEvent).where(
+        KycTriggerEvent.user_id == uid).order_by(KycTriggerEvent.created_at.desc()).limit(50))
+    ).scalars().all()
+    return {"events": [
+        {"id": str(e.id), "trigger": e.trigger_key, "event_type": e.event_type,
+         "required_level": e.required_level, "status": e.status,
+         "created_at": e.created_at.isoformat() if e.created_at else None,
+         "satisfied_at": e.satisfied_at.isoformat() if e.satisfied_at else None}
+        for e in rows
+    ], "open": sum(1 for e in rows if e.status == "open")}
+
+
+@router.get("/admin/triggers")
+async def admin_trigger_events(status_filter: Optional[str] = None,
+                               db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Admin view of all trigger events (PBAC-protected at gateway/middleware)."""
+    from database.models import KycTriggerEvent
+    q = _sa_select(KycTriggerEvent).order_by(KycTriggerEvent.created_at.desc()).limit(200)
+    if status_filter:
+        q = q.where(KycTriggerEvent.status == status_filter)
+    rows = (await db.execute(q)).scalars().all()
+    return {"events": [
+        {"id": str(e.id), "user_id": str(e.user_id), "trigger": e.trigger_key,
+         "event_type": e.event_type, "current_level": e.current_level,
+         "required_level": e.required_level, "status": e.status,
+         "created_at": e.created_at.isoformat() if e.created_at else None}
+        for e in rows
+    ]}

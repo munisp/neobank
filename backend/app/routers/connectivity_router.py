@@ -296,6 +296,16 @@ async def queue_offline_transaction(request: OfflineTransactionRequest):
                 recipient=request.recipient,
                 metadata=request.metadata
             )
+            # Edge ingestion: stream to Fluvio (offline-tx-events, durable acks)
+            try:
+                from app.infrastructure.fluvio_client import get_fluvio_producer
+                get_fluvio_producer().produce("offline-tx-events", {
+                    "transaction_id": tx.transaction_id,
+                    "user_id": request.user_id, "type": request.type,
+                    "amount": float(request.amount), "recipient": request.recipient,
+                }, key=request.user_id, durable=True)
+            except Exception as fe:  # noqa: BLE001
+                logger.warning(f"Fluvio produce failed (non-blocking): {fe}")
             return {
                 "transaction_id": tx.transaction_id,
                 "status": "queued",

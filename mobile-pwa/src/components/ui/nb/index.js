@@ -7,3 +7,5 @@ export { NBBalanceCard } from './NBBalanceCard.jsx';
 export { NBTransactionRow } from './NBTransactionRow.jsx';
 export { NBEmptyState, NBErrorState, NBOfflineBanner } from './NBStates.jsx';
 export { NBSheet } from './NBSheet.jsx';
+
+export { SPRING, MotionPage, Pressable, Stagger, StaggerItem, SheetMotion, SuccessCheck, useHaptics, AnimatePresence } from './motion.jsx';

@@ -1,0 +1,84 @@
+# APISIX gateway routes for the platform-expansion APIs.
+# OpenAppSec WAF attaches at the gateway layer (openappsec plugin) so all
+# new surfaces inherit inspection automatically.
+# Apply:  apisix reload  (or admin API: PUT /apisix/admin/routes/{id})
+
+routes:
+  - id: segments-appstore
+    name: segments-appstore
+    uri: /api/v1/segments*
+    methods: [GET, POST, PATCH, DELETE]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 600, time_window: 60, rejected_code: 429 }
+
+  - id: developer-platform
+    name: developer-platform
+    uri: /api/v1/developers*
+    methods: [GET, POST, PATCH]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 300, time_window: 60, rejected_code: 429 }
+
+  - id: developer-partner-api
+    name: developer-partner-api
+    uri: /api/v1/partner/*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      # third-party apps authenticate with X-NB-Api-Key (verified upstream)
+      limit-count: { count: 1000, time_window: 60, rejected_code: 429 }
+      response-rewrite: { headers: { X-Partner-Gateway: apisix } }
+
+  - id: mortgages
+    name: mortgages
+    uri: /api/v1/mortgages*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+
+  - id: ngx-investing
+    name: ngx-investing
+    uri: /api/v1/ngx*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+
+  - id: stablecoins
+    name: stablecoins
+    uri: /api/v1/stablecoins*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+
+  - id: settlement-admin
+    name: settlement-admin
+    uri: /api/v1/settlement*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 120, time_window: 60, rejected_code: 429 }
+
+  - id: innovations
+    name: innovations
+    uri: /api/v1/innovations*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+
+  - id: tenant-themes
+    name: tenant-themes
+    uri: /api/v1/themes*
+    methods: [GET]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+
+# Global: OpenAppSec agent inspects all north-south traffic at this gateway;
+# see openappsec deployment manifest. Dapr sidecars handle east-west calls
+# between backend (Python) and the Go/Rust services over mTLS.

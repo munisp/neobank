@@ -542,6 +542,8 @@ class IDVSession(Base, TimestampMixin):
     session_url = Column(Text, nullable=True)
     front_image_b64 = Column(Text, nullable=True)
     back_image_b64 = Column(Text, nullable=True)
+    selfie_image_b64 = Column(Text, nullable=True)
+    biometrics_result = Column(JSONB, nullable=True)  # liveness + face-match decision
     result = Column(JSONB, nullable=True)
     error_message = Column(Text, nullable=True)
 
@@ -564,6 +566,29 @@ class IDVWebhookLog(Base, TimestampMixin):
 
     __table_args__ = (
         Index('idx_idv_webhook_session', 'session_id'),
+    )
+
+
+class KycTriggerEvent(Base, TimestampMixin):
+    """Event-driven KYC requirement raised by the trigger engine.
+
+    Fired by money-movement, product-onboarding, and risk events; tracks
+    the level the user must reach and whether it has been satisfied."""
+    __tablename__ = "kyc_trigger_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    trigger_key = Column(String(64), nullable=False)      # e.g. daily_limit_tier1, ngx_onboarding
+    event_type = Column(String(64), nullable=False)        # originating event (transfer, ngx_order, ...)
+    current_level = Column(String(20), nullable=False)     # user's level when fired
+    required_level = Column(String(20), nullable=False)    # level the trigger demands
+    context = Column(JSONB, nullable=True)                 # amount, currency, channel, ...
+    status = Column(String(20), default="open", nullable=False)  # open | satisfied | waived
+    satisfied_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index('idx_kyc_trigger_user', 'user_id'),
+        Index('idx_kyc_trigger_status', 'status'),
     )
 
 
@@ -675,3 +700,261 @@ class UserSegment(Base, TimestampMixin):
     )
     segment = relationship("Segment")
 
+
+
+# ============================================================================
+# Platform expansion: developer ecosystem, settlement, mortgages, NGX,
+# stablecoins, tenant themes, segment analytics
+# ============================================================================
+
+class Developer(Base, TimestampMixin):
+    """Third-party developer account."""
+    __tablename__ = "developers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    company_name = Column(String(255), nullable=False)
+    website = Column(String(255), nullable=True)
+    status = Column(String(32), default="pending", nullable=False)  # pending | verified | suspended
+
+
+class DeveloperApp(Base, TimestampMixin):
+    """A third-party app going through vetting for the segment app store."""
+    __tablename__ = "developer_apps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    developer_id = Column(UUID(as_uuid=True), ForeignKey("developers.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(128), nullable=False)
+    tagline = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+    icon = Column(String(64), nullable=True)
+    callback_url = Column(String(512), nullable=True)               # webhook endpoint
+    scopes = Column(JSONB, default=list)                            # e.g. ["accounts:read", "payments:initiate"]
+    target_segments = Column(JSONB, default=list)                   # segment keys the app targets
+    status = Column(String(32), default="draft", nullable=False)    # draft | submitted | approved | rejected | suspended
+    review_notes = Column(Text, nullable=True)
+    api_key_hash = Column(String(128), nullable=True)               # sha256 of issued key
+    api_key_prefix = Column(String(16), nullable=True)              # "nbk_live_ab12" for identification
+    published_segment_app_id = Column(UUID(as_uuid=True), ForeignKey("segment_apps.id", ondelete="SET NULL"), nullable=True)
+
+    developer = relationship("Developer", backref="apps")
+
+
+class DeveloperWebhook(Base, TimestampMixin):
+    """Webhook subscription for a developer app (HMAC-signed deliveries)."""
+    __tablename__ = "developer_webhooks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    app_id = Column(UUID(as_uuid=True), ForeignKey("developer_apps.id", ondelete="CASCADE"), nullable=False)
+    event = Column(String(64), nullable=False)                      # e.g. payment.completed
+    url = Column(String(512), nullable=False)
+    secret = Column(String(128), nullable=False)                    # signing secret
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+class TenantTheme(Base, TimestampMixin):
+    """Server-side tenant Brand Pack (replaces localStorage-only persistence)."""
+    __tablename__ = "tenant_themes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_key = Column(String(64), unique=True, nullable=False)
+    seed_color = Column(String(7), nullable=False)                  # hex
+    radius = Column(String(16), default="default", nullable=False)  # sharp | default | round
+    motion_bias = Column(String(16), default="standard", nullable=False)
+    voice = Column(String(32), default="neutral", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+class SegmentEvent(Base, TimestampMixin):
+    """Analytics: enroll / launch / view events per segment and app."""
+    __tablename__ = "segment_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    segment_key = Column(String(64), nullable=False)
+    app_key = Column(String(64), nullable=True)
+    event = Column(String(32), nullable=False)                      # view | enroll | launch
+
+    __table_args__ = (
+        Index('idx_segment_events_seg_event', 'segment_key', 'event'),
+        Index('idx_segment_events_user', 'user_id'),
+    )
+
+
+class SettlementBatch(Base, TimestampMixin):
+    """A settlement run over a period (pairs with the reconciliation engine)."""
+    __tablename__ = "settlement_batches"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    reference = Column(String(64), unique=True, nullable=False)     # e.g. STL-20261004-001
+    period_start = Column(DateTime(timezone=True), nullable=False)
+    period_end = Column(DateTime(timezone=True), nullable=False)
+    status = Column(String(32), default="open", nullable=False)     # open | processing | settled | failed
+    total_debits = Column(Numeric(18, 2), default=0, nullable=False)
+    total_credits = Column(Numeric(18, 2), default=0, nullable=False)
+    net_position = Column(Numeric(18, 2), default=0, nullable=False)
+    entry_count = Column(Integer, default=0, nullable=False)
+    settled_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class SettlementEntry(Base, TimestampMixin):
+    """One line in a settlement batch (per counterparty/account)."""
+    __tablename__ = "settlement_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    batch_id = Column(UUID(as_uuid=True), ForeignKey("settlement_batches.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    direction = Column(String(8), nullable=False)                   # debit | credit
+    amount = Column(Numeric(18, 2), nullable=False)
+    currency = Column(String(3), default="NGN", nullable=False)
+    reference = Column(String(128), nullable=True)
+    reconciled = Column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        Index('idx_settlement_entries_batch', 'batch_id'),
+    )
+    batch = relationship("SettlementBatch", backref="entries")
+
+
+class MortgageProduct(Base, TimestampMixin):
+    """A mortgage offer (property type, rate, tenor) — admin-managed."""
+    __tablename__ = "mortgage_products"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    annual_rate_pct = Column(Numeric(5, 2), nullable=False)         # e.g. 21.00
+    max_tenor_years = Column(Integer, default=20, nullable=False)
+    min_deposit_pct = Column(Numeric(5, 2), default=20, nullable=False)
+    max_amount = Column(Numeric(18, 2), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+class MortgageApplication(Base, TimestampMixin):
+    """A user's mortgage application with payment plan."""
+    __tablename__ = "mortgage_applications"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(UUID(as_uuid=True), ForeignKey("mortgage_products.id"), nullable=False)
+    property_value = Column(Numeric(18, 2), nullable=False)
+    deposit_amount = Column(Numeric(18, 2), nullable=False)
+    principal = Column(Numeric(18, 2), nullable=False)
+    annual_rate_pct = Column(Numeric(5, 2), nullable=False)
+    tenor_months = Column(Integer, nullable=False)
+    monthly_payment = Column(Numeric(18, 2), nullable=False)
+    status = Column(String(32), default="draft", nullable=False)    # draft | submitted | approved | declined | active | completed
+    property_address = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index('idx_mortgage_apps_user', 'user_id'),
+    )
+    product = relationship("MortgageProduct")
+
+
+class MortgageScheduleEntry(Base, TimestampMixin):
+    """One installment in a mortgage payment plan."""
+    __tablename__ = "mortgage_schedule"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    application_id = Column(UUID(as_uuid=True), ForeignKey("mortgage_applications.id", ondelete="CASCADE"), nullable=False)
+    sequence = Column(Integer, nullable=False)                      # 1..tenor_months
+    due_date = Column(DateTime(timezone=True), nullable=False)
+    amount = Column(Numeric(18, 2), nullable=False)                 # EMI
+    principal_part = Column(Numeric(18, 2), nullable=False)
+    interest_part = Column(Numeric(18, 2), nullable=False)
+    balance_after = Column(Numeric(18, 2), nullable=False)
+    status = Column(String(16), default="due", nullable=False)      # due | paid | late
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('application_id', 'sequence', name='uq_mortgage_schedule_seq'),
+        Index('idx_mortgage_schedule_app', 'application_id'),
+    )
+    application = relationship("MortgageApplication", backref="schedule")
+
+
+class NgxSecurity(Base, TimestampMixin):
+    """NGX-listed security master (seeded with major listings)."""
+    __tablename__ = "ngx_securities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    symbol = Column(String(16), unique=True, nullable=False)        # e.g. DANGCEM
+    name = Column(String(255), nullable=False)
+    sector = Column(String(64), nullable=True)
+    last_price = Column(Numeric(14, 2), nullable=False)             # NGN per share
+    currency = Column(String(3), default="NGN", nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+
+class NgxOrder(Base, TimestampMixin):
+    """A buy/sell order for an NGX security."""
+    __tablename__ = "ngx_orders"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    security_id = Column(UUID(as_uuid=True), ForeignKey("ngx_securities.id"), nullable=False)
+    side = Column(String(4), nullable=False)                        # buy | sell
+    quantity = Column(Integer, nullable=False)
+    price = Column(Numeric(14, 2), nullable=False)                  # execution price
+    gross_amount = Column(Numeric(18, 2), nullable=False)
+    fee = Column(Numeric(18, 2), default=0, nullable=False)
+    status = Column(String(16), default="executed", nullable=False) # executed | pending | cancelled
+
+    __table_args__ = (
+        Index('idx_ngx_orders_user', 'user_id'),
+    )
+    security = relationship("NgxSecurity")
+
+
+class NgxHolding(Base, TimestampMixin):
+    """Aggregated NGX position per user/security."""
+    __tablename__ = "ngx_holdings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    security_id = Column(UUID(as_uuid=True), ForeignKey("ngx_securities.id"), nullable=False)
+    quantity = Column(Integer, default=0, nullable=False)
+    avg_cost = Column(Numeric(14, 2), default=0, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'security_id', name='uq_ngx_holding'),
+    )
+    security = relationship("NgxSecurity")
+
+
+class StablecoinWallet(Base, TimestampMixin):
+    """Custodial stablecoin balance (USDT/USDC) per user."""
+    __tablename__ = "stablecoin_wallets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    asset = Column(String(8), nullable=False)                       # USDT | USDC
+    balance = Column(Numeric(28, 8), default=0, nullable=False)
+    address = Column(String(128), nullable=True)                    # deposit address (custodial)
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'asset', name='uq_stablecoin_wallet'),
+        Index('idx_stablecoin_wallets_user', 'user_id'),
+    )
+
+
+class StablecoinTransfer(Base, TimestampMixin):
+    """Stablecoin ledger entries: ramp in/out, P2P transfers."""
+    __tablename__ = "stablecoin_transfers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    wallet_id = Column(UUID(as_uuid=True), ForeignKey("stablecoin_wallets.id", ondelete="CASCADE"), nullable=False)
+    type = Column(String(16), nullable=False)                       # ramp_in | ramp_out | send | receive
+    asset = Column(String(8), nullable=False)
+    amount = Column(Numeric(28, 8), nullable=False)
+    ngn_amount = Column(Numeric(18, 2), nullable=True)              # for ramps
+    rate = Column(Numeric(18, 4), nullable=True)                    # NGN per USD for ramps
+    counterparty = Column(String(128), nullable=True)               # address or user ref
+    status = Column(String(16), default="completed", nullable=False)
+    tx_hash = Column(String(128), nullable=True)
+
+    __table_args__ = (
+        Index('idx_stablecoin_transfers_wallet', 'wallet_id'),
+    )
+    wallet = relationship("StablecoinWallet", backref="transfers")

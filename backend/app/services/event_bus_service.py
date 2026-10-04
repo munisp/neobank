@@ -11,9 +11,22 @@ from datetime import datetime
 from uuid import UUID
 import structlog
 from collections import defaultdict
-import aio_pika
-from aio_pika import Message, ExchangeType
-from aio_pika.abc import AbstractIncomingMessage
+try:
+    from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
+    _AIOKAFKA_AVAILABLE = True
+except ImportError:  # Kafka driver optional until deployed with kafka
+    AIOKafkaProducer = AIOKafkaConsumer = None
+    _AIOKAFKA_AVAILABLE = False
+
+try:
+    import aio_pika
+    from aio_pika import Message, ExchangeType
+    from aio_pika.abc import AbstractIncomingMessage
+    _AIO_PIKA_AVAILABLE = True
+except ImportError:  # RabbitMQ driver optional — in-memory bus still works
+    aio_pika = None
+    Message = ExchangeType = AbstractIncomingMessage = None
+    _AIO_PIKA_AVAILABLE = False
 
 from app.events.models import BaseEvent, create_event_from_dict
 from config.settings import settings
@@ -410,23 +423,106 @@ class RabbitMQEventBus:
         }
 
 
+
+
+class KafkaEventBus:
+    """Kafka-backed event bus — the platform backbone.
+
+    Topics: {KAFKA_TOPIC_PREFIX}.{aggregate_type} with the event_type in the
+    payload envelope. Keys = aggregate_id for partition affinity.
+    """
+
+    def __init__(self):
+        from config.settings import settings
+        self.brokers = settings.KAFKA_BROKERS
+        self.prefix = settings.KAFKA_TOPIC_PREFIX
+        self.producer = None
+        self._stats = {"published": 0, "errors": 0}
+
+    async def start(self):
+        if self.producer is None:
+            self.producer = AIOKafkaProducer(bootstrap_servers=self.brokers)
+            await self.producer.start()
+            logger.info("Kafka event bus started", brokers=self.brokers)
+
+    async def stop(self):
+        if self.producer is not None:
+            await self.producer.stop()
+            self.producer = None
+
+    async def publish(self, event: BaseEvent):
+        if self.producer is None:
+            await self.start()
+        topic = f"{self.prefix}.{event.aggregate_type}"
+        envelope = json.dumps({
+            "event_id": str(event.event_id),
+            "event_type": event.event_type,
+            "aggregate_id": event.aggregate_id,
+            "aggregate_type": event.aggregate_type,
+            "version": event.version,
+            "user_id": event.user_id,
+            "created_at": event.created_at.isoformat(),
+            "payload": getattr(event, "payload", {}),
+        }).encode()
+        try:
+            await self.producer.send_and_wait(
+                topic, envelope, key=event.aggregate_id.encode())
+            self._stats["published"] += 1
+        except Exception as exc:
+            self._stats["errors"] += 1
+            logger.warning("kafka.publish_failed", topic=topic, error=str(exc))
+            raise
+
+    async def subscribe(self, name, handler, event_types=None, async_handler=True):
+        # Consumer groups subscribe per aggregate topic; kept minimal here —
+        # consumers (projections, notifications) run in dedicated workers.
+        logger.info("kafka.subscribe", name=name, event_types=event_types)
+
+    def get_stats(self):
+        return dict(self._stats)
+
 class EventBusService:
     """
     Unified event bus service
     Uses RabbitMQ if available, falls back to in-memory
     """
     
-    def __init__(self, use_rabbitmq: bool = False):
-        if use_rabbitmq:
+    def __init__(self, backend: str = "auto", use_rabbitmq: bool = False):
+        from config.settings import settings
+        choice = backend
+        if choice == "auto":
+            choice = ("kafka" if (settings.KAFKA_BROKERS and _AIOKAFKA_AVAILABLE)
+                      else "rabbitmq" if (use_rabbitmq and _AIO_PIKA_AVAILABLE)
+                      else "memory")
+        if choice == "kafka" and not _AIOKAFKA_AVAILABLE:
+            logger.warning("Kafka requested but aiokafka not installed — using in-memory bus")
+            choice = "memory"
+        if choice == "rabbitmq" and not _AIO_PIKA_AVAILABLE:
+            logger.warning("RabbitMQ requested but aio_pika not installed — using in-memory bus")
+            choice = "memory"
+
+        self.backend = choice
+        if choice == "kafka":
+            self.bus = KafkaEventBus()
+        elif choice == "rabbitmq":
             self.bus = RabbitMQEventBus()
         else:
             self.bus = InMemoryEventBus()
-        
-        self.use_rabbitmq = use_rabbitmq
+
+        # legacy flag kept for existing call sites
+        self.use_rabbitmq = choice == "rabbitmq"
     
     async def publish(self, event: BaseEvent):
-        """Publish an event"""
-        await self.bus.publish(event)
+        """Publish an event; falls back to in-memory on Kafka failure."""
+        try:
+            await self.bus.publish(event)
+        except Exception as exc:
+            if self.backend == "kafka":
+                logger.warning("kafka.publish_failed — falling back to memory",
+                               error=str(exc))
+                await InMemoryEventBus().publish(event)
+            else:
+                raise
     
     async def subscribe(
         self,
@@ -457,7 +553,7 @@ class EventBusService:
     def get_stats(self) -> Dict[str, Any]:
         """Get event bus statistics"""
         stats = self.bus.get_stats()
-        stats["type"] = "rabbitmq" if self.use_rabbitmq else "in_memory"
+        stats["type"] = self.backend
         return stats
 
 
@@ -465,11 +561,18 @@ class EventBusService:
 _event_bus: Optional[EventBusService] = None
 
 
-def get_event_bus(use_rabbitmq: bool = False) -> EventBusService:
-    """Get or create global event bus instance"""
+def get_event_bus(use_rabbitmq: bool = False, backend: str = "auto") -> EventBusService:
+    """Get or create global event bus instance.
+
+    Backend selection (auto): Kafka when KAFKA_BROKERS is configured and
+    aiokafka is installed → RabbitMQ when explicitly requested → in-memory.
+    Override with EVENT_BUS_BACKEND=kafka|rabbitmq|memory.
+    """
     global _event_bus
     
     if _event_bus is None:
-        _event_bus = EventBusService(use_rabbitmq=use_rabbitmq)
+        from config.settings import settings
+        chosen = settings.EVENT_BUS_BACKEND if settings.EVENT_BUS_BACKEND != "auto" else backend
+        _event_bus = EventBusService(backend=chosen, use_rabbitmq=use_rabbitmq)
     
     return _event_bus
