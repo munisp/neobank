@@ -29,6 +29,9 @@ class PermifyEntityType(str, Enum):
     BILL_PAYMENT = "bill_payment"
     BNPL_PURCHASE = "bnpl_purchase"
     ANALYTICS_REPORT = "analytics_report"
+    VIRTUAL_ACCOUNT = "virtual_account"
+    CREDIT_ASSESSMENT = "credit_assessment"
+    ALT_DATA_SOURCE = "alt_data_source"
     SYSTEM = "system"
 
 

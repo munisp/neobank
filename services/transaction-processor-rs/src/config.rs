@@ -17,6 +17,9 @@ pub struct AppConfig {
     pub kafka_brokers: String,
     pub kafka_topic_transactions: String,
     pub kafka_topic_events: String,
+    pub kafka_topic_escrow: String,
+    pub kafka_topic_credit: String,
+    pub kafka_topic_virtual_account: String,
     pub kafka_consumer_group: String,
     pub tigerbeetle_addresses: String,
     pub log_level: String,
@@ -42,6 +45,12 @@ impl AppConfig {
                 .unwrap_or_else(|_| "neobank.transactions".to_string()),
             kafka_topic_events: env::var("KAFKA_TOPIC_EVENTS")
                 .unwrap_or_else(|_| "neobank.events".to_string()),
+            kafka_topic_escrow: env::var("KAFKA_TOPIC_ESCROW")
+                .unwrap_or_else(|_| "neobank.escrow".to_string()),
+            kafka_topic_credit: env::var("KAFKA_TOPIC_CREDIT")
+                .unwrap_or_else(|_| "neobank.credit_assessment".to_string()),
+            kafka_topic_virtual_account: env::var("KAFKA_TOPIC_VIRTUAL_ACCOUNT")
+                .unwrap_or_else(|_| "neobank.virtual_account".to_string()),
             kafka_consumer_group: env::var("KAFKA_CONSUMER_GROUP")
                 .unwrap_or_else(|_| "transaction-processor".to_string()),
             tigerbeetle_addresses: env::var("TIGERBEETLE_ADDRESSES")

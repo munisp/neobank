@@ -55,6 +55,10 @@ import Savings from './pages/Savings';
 import Rewards from './pages/Rewards';
 import BNPL from './pages/BNPL';
 import Escrow from './pages/Escrow';
+import VirtualAccounts from './pages/VirtualAccounts';
+import AltData from './pages/AltData'
+import PositivePay from './pages/PositivePay';
+import Intelligence from './pages/Intelligence';
 import Innovations from './pages/Innovations';
 
 // Services
@@ -185,6 +189,10 @@ function App() {
                             <Route path="/rewards" element={<Rewards />} />
                             <Route path="/bnpl" element={<BNPL />} />
                             <Route path="/escrow" element={<Escrow />} />
+                            <Route path="/virtual-accounts" element={<VirtualAccounts />} />
+                            <Route path="/credit-data" element={<AltData />} />
+                            <Route path="/positive-pay" element={<PositivePay />} />
+                            <Route path="/intelligence" element={<Intelligence />} />
                             <Route path="/innovations" element={<Innovations />} />
                             <Route path="/notifications" element={<Notifications />} />
                             <Route path="/documents" element={<Documents />} />

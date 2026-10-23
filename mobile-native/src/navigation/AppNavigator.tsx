@@ -31,6 +31,10 @@ import AirtimeScreen from '../screens/bills/AirtimeScreen';
 // QR Screens
 import QRScannerScreen from '../screens/qr/QRScannerScreen';
 import QRPaymentScreen from '../screens/qr/QRPaymentScreen';
+import VirtualAccountsScreen from '../screens/main/VirtualAccountsScreen';
+import PositivePayScreen from '../screens/main/PositivePayScreen';
+import IntelligenceScreen from '../screens/main/IntelligenceScreen';
+import EscrowScreen from '../screens/main/EscrowScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -165,6 +169,26 @@ const MainStack: React.FC = () => {
         name="Settings" 
         component={SettingsScreen}
         options={{ title: 'Settings' }}
+      />
+      <Stack.Screen
+        name="VirtualAccounts"
+        component={VirtualAccountsScreen}
+        options={{ title: 'Virtual Accounts' }}
+      />
+      <Stack.Screen
+        name="PositivePay"
+        component={PositivePayScreen}
+        options={{ title: 'Safe Payees' }}
+      />
+      <Stack.Screen
+        name="Intelligence"
+        component={IntelligenceScreen}
+        options={{ title: 'Smart For You' }}
+      />
+      <Stack.Screen
+        name="Escrow"
+        component={EscrowScreen}
+        options={{ title: 'Escrow' }}
       />
       <Stack.Screen 
         name="KYC" 

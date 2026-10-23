@@ -79,6 +79,105 @@ routes:
     methods: [GET]
     upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
 
+  - id: credit-decisioning
+    name: credit-decisioning
+    uri: /api/v1/credit*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 60, time_window: 60, rejected_code: 429 }
+
+  - id: alt-data
+    name: alt-data
+    uri: /api/v1/alt-data*
+    methods: [GET, POST, DELETE]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 300, time_window: 60, rejected_code: 429 }
+
+  - id: virtual-accounts
+    name: virtual-accounts
+    uri: /api/v1/virtual-accounts*
+    methods: [GET, POST, PATCH, DELETE]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 120, time_window: 60, rejected_code: 429 }
+
+  - id: escrow-multiparty
+    name: escrow-multiparty
+    uri: /api/v1/escrow*
+    methods: [GET, POST, PATCH, DELETE]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 120, time_window: 60, rejected_code: 429 }
+
+  - id: positive-pay
+    name: positive-pay
+    uri: /api/v1/positive-pay*
+    methods: [GET, POST, DELETE]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 120, time_window: 60, rejected_code: 429 }
+
+  - id: billing
+    name: billing
+    uri: /api/v1/billing*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 120, time_window: 60, rejected_code: 429 }
+
+  - id: document-intake
+    name: document-intake
+    uri: /api/v1/documents*
+    methods: [POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 30, time_window: 60, rejected_code: 429 }
+
+  - id: controls-admin
+    name: controls-admin
+    uri: /api/v1/controls*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 30, time_window: 60, rejected_code: 429 }
+
+  - # Behavior intelligence: next-actions, recurring, forecast, feedback
+    name: intelligence
+    uri: /api/v1/intelligence/*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 120, time_window: 60, rejected_code: 429 }
+
+  - # Ops intelligence: copilot, triage, reconciliation, model registry (staff)
+    name: ops-intelligence
+    uri: /api/v1/ops/*
+    methods: [GET, POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 60, time_window: 60, rejected_code: 429 }
+
+  - # ACH NACHA validate/parse + inbound return-file ingestion (ach-go sidecar)
+    name: ach-nacha
+    uri: /api/v1/ach/*
+    methods: [POST]
+    upstream: { type: roundrobin, nodes: { "backend:8000": 1 } }
+    plugins:
+      jwt-auth: {}
+      limit-count: { count: 60, time_window: 60, rejected_code: 429 }
+
 # Global: OpenAppSec agent inspects all north-south traffic at this gateway;
 # see openappsec deployment manifest. Dapr sidecars handle east-west calls
 # between backend (Python) and the Go/Rust services over mTLS.

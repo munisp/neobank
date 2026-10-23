@@ -99,6 +99,9 @@ impl KafkaConsumer {
             topics: vec![
                 config.kafka_topic_transactions.clone(),
                 config.kafka_topic_events.clone(),
+                config.kafka_topic_escrow.clone(),
+                config.kafka_topic_credit.clone(),
+                config.kafka_topic_virtual_account.clone(),
             ],
             enabled: !config.kafka_brokers.is_empty(),
         })

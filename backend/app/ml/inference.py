@@ -170,3 +170,69 @@ def get_fraud_scorer() -> MLFraudScorer:
     if _scorer is None:
         _scorer = MLFraudScorer()
     return _scorer
+
+
+class CreditScorer:
+    """Inference wrapper for the credit_mlp champion (probability of default).
+
+    Shares the ModelRegistry with fraud scoring. Returns the PD plus the
+    model version used, so every decision is auditable back to weights.
+    """
+
+    def __init__(self, registry: Optional[ModelRegistry] = None):
+        self._registry = registry or ModelRegistry()
+        self._loaded = False
+        self._model = None
+        self._meta: Dict[str, Any] = {}
+
+    def _ensure_loaded(self) -> bool:
+        if not self._loaded:
+            try:
+                from app.ml.models import CreditMLP
+                t = _torch()
+                entry = self._registry.champion("credit_mlp")
+                if entry:
+                    model = CreditMLP()
+                    state = t.load(entry["path"], map_location="cpu")
+                    model.load_state_dict(state)
+                    model.eval()
+                    self._model = model
+                    self._meta = entry
+                    logger.info("credit_model_loaded", version=entry["version"],
+                                metrics=entry.get("metrics", {}))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("credit_model_load_failed", error=str(exc))
+            self._loaded = True
+        return self._model is not None
+
+    @property
+    def available(self) -> bool:
+        return self._ensure_loaded()
+
+    def score(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Probability of default in [0,1] for the aggregated user context."""
+        if not self._ensure_loaded():
+            return {"available": False, "pd": None,
+                    "detail": "credit_mlp weights not found — policy rules only"}
+        from app.ml.features import extract_credit_features, CREDIT_FEATURE_SCHEMA_VERSION
+        t = _torch()
+        x = extract_credit_features(context)
+        with t.inference_mode():
+            pd_value = float(self._model(t.tensor(x, dtype=t.float32).unsqueeze(0)).item())
+        return {
+            "available": True,
+            "pd": round(pd_value, 4),
+            "model_version": self._meta.get("version"),
+            "model_metrics": self._meta.get("metrics", {}),
+            "schema": CREDIT_FEATURE_SCHEMA_VERSION,
+        }
+
+
+_credit_scorer: Optional[CreditScorer] = None
+
+
+def get_credit_scorer() -> CreditScorer:
+    global _credit_scorer
+    if _credit_scorer is None:
+        _credit_scorer = CreditScorer()
+    return _credit_scorer

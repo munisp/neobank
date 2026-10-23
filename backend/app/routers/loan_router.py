@@ -3,6 +3,10 @@ Production Loan Router - Proxies to Go Banking Service for high performance
 """
 import os
 from typing import Dict, Any, Optional
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+from app.middleware.auth import get_current_user  # noqa: E402
+from app.services.credit_decision_service import gate_credit_application  # noqa: E402
+from database.connection import get_db  # noqa: E402
 from fastapi import APIRouter, HTTPException, Request
 import httpx
 import structlog
@@ -54,8 +58,17 @@ async def proxy_to_go_service(
 
 
 @router.post("/apply")
-async def apply_for_loan(request: Request, data: Dict[str, Any]):
-    """Apply for a new loan"""
+async def apply_for_loan(request: Request, data: Dict[str, Any],
+                         claims: Dict[str, Any] = Depends(get_current_user),
+                         db: AsyncSession = Depends(get_db)):
+    """Apply for a loan — gated on authentic credit assessment"""
+    amount = data.get("amount") or data.get("principal") or data.get("loan_amount")
+    decision = await gate_credit_application(db, claims, "loan",
+                                             float(amount) if amount else None)
+    data["credit_assessment"] = {"credit_score": decision["credit_score"],
+                                 "grade": decision["grade"],
+                                 "suggested_annual_rate_pct": decision["suggested_annual_rate_pct"],
+                                 "max_limit": decision["max_limit"]}
     headers = {"Authorization": request.headers.get("Authorization", "")}
     return await proxy_to_go_service("POST", "/apply", json_data=data, headers=headers)
 

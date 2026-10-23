@@ -138,6 +138,11 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
+        # Dapr sidecar: pub/sub (Kafka-backed) + state for the feature
+        # integration layer (escrow / credit / alt-data / virtual accounts).
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "backend-api"
+        dapr.io/app-port: "8000"
     
     spec:
       # Pod Anti-Affinity: Spread pods across different nodes for HA

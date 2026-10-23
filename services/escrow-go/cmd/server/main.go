@@ -38,8 +38,14 @@ func main() {
 	escrowService := service.NewEscrowService(db, nil)
 
 	escrowHandler := handlers.NewEscrowHandler(escrowService)
+	eventsHandler := handlers.NewEventsHandler()
 
 	r := mux.NewRouter()
+
+	// Dapr pub/sub: declarative subscription + delivery endpoint for
+	// escrow lifecycle events published by the Python core via Kafka.
+	r.HandleFunc("/dapr/subscribe", eventsHandler.Subscribe).Methods("GET")
+	r.HandleFunc("/events/escrow", eventsHandler.HandleEscrowEvent).Methods("POST")
 
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

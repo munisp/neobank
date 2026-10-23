@@ -1,5 +1,5 @@
 """API Router for BNPL Service - Proxies to Go bnpl-go service"""
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header
 from typing import Dict, Any, Optional
 import httpx
 import os
@@ -7,6 +7,11 @@ import os
 router = APIRouter(prefix="/bnpl", tags=["bnpl"])
 
 GO_SERVICE_URL = os.getenv("BNPL_GO_URL", "http://localhost:8085")
+
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
+from app.middleware.auth import get_current_user  # noqa: E402
+from app.services.credit_decision_service import gate_credit_application  # noqa: E402
+from database.connection import get_db  # noqa: E402
 
 async def proxy_request(method: str, path: str, data: Optional[Dict] = None, token: Optional[str] = None):
     """Proxy request to Go BNPL service"""
@@ -46,8 +51,16 @@ async def calculate_installments(data: Dict[str, Any], authorization: Optional[s
 
 # Orders
 @router.post("/orders")
-async def create_order(data: Dict[str, Any], authorization: Optional[str] = Header(None)):
-    """Create BNPL order"""
+async def create_order(data: Dict[str, Any], authorization: Optional[str] = Header(None),
+                       claims: Dict[str, Any] = Depends(get_current_user),
+                       db: AsyncSession = Depends(get_db)):
+    """Create BNPL order — gated on authentic credit assessment"""
+    amount = data.get("amount") or data.get("total_amount") or data.get("total")
+    decision = await gate_credit_application(db, claims, "bnpl",
+                                             float(amount) if amount else None)
+    data["credit_assessment"] = {"credit_score": decision["credit_score"],
+                                 "grade": decision["grade"],
+                                 "max_limit": decision["max_limit"]}
     token = authorization.replace("Bearer ", "") if authorization else None
     return await proxy_request("POST", "/orders", data, token)
 

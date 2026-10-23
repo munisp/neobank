@@ -814,6 +814,66 @@ class LakehouseService:
             logger.error("table_creation_failed", table="audit_events", error=str(e))
             return False
 
+    async def create_alt_data_signals_table(self) -> bool:
+        """Bronze layer: raw normalised alternative-data signals"""
+        try:
+            schema = Schema(
+                NestedField(1, "signal_id", StringType(), required=True),
+                NestedField(2, "user_id", StringType(), required=True),
+                NestedField(3, "source", StringType(), required=True),
+                NestedField(4, "signal_type", StringType(), required=True),
+                NestedField(5, "amount", DecimalType(18, 2), required=True),
+                NestedField(6, "balance_after", DecimalType(18, 2)),
+                NestedField(7, "occurred_at", TimestampType(), required=True),
+                NestedField(8, "trust", DecimalType(3, 2), required=True),
+                NestedField(9, "raw_json", StringType())
+            )
+            partition_spec = PartitionSpec(
+                PartitionField(source_id=7, field_id=1000, transform=DayTransform(), name="day")
+            )
+            if self.catalog:
+                self.catalog.create_table(f"{self.namespace}.alt_data_signals",
+                                          schema=schema, partition_spec=partition_spec)
+                logger.info("table_created", table="alt_data_signals")
+                return True
+            return False
+        except Exception as e:
+            logger.error("table_creation_failed", table="alt_data_signals", error=str(e))
+            return False
+
+    async def create_credit_assessments_table(self) -> bool:
+        """Gold layer: credit decisions — ML labels in waiting"""
+        try:
+            schema = Schema(
+                NestedField(1, "assessment_id", StringType(), required=True),
+                NestedField(2, "user_id", StringType(), required=True),
+                NestedField(3, "product", StringType(), required=True),
+                NestedField(4, "requested_amount", DecimalType(18, 2)),
+                NestedField(5, "credit_score", DecimalType(5, 1), required=True),
+                NestedField(6, "grade", StringType(), required=True),
+                NestedField(7, "decision", StringType(), required=True),
+                NestedField(8, "probability_of_default", DecimalType(6, 4)),
+                NestedField(9, "authenticity_score", DecimalType(4, 3)),
+                NestedField(10, "authenticity_grade", StringType()),
+                NestedField(11, "model_version", StringType()),
+                NestedField(12, "max_limit", DecimalType(18, 2)),
+                NestedField(13, "suggested_rate_pct", DecimalType(5, 2)),
+                NestedField(14, "context_json", StringType()),
+                NestedField(15, "created_at", TimestampType(), required=True)
+            )
+            partition_spec = PartitionSpec(
+                PartitionField(source_id=15, field_id=1000, transform=DayTransform(), name="day")
+            )
+            if self.catalog:
+                self.catalog.create_table(f"{self.namespace}.credit_assessments",
+                                          schema=schema, partition_spec=partition_spec)
+                logger.info("table_created", table="credit_assessments")
+                return True
+            return False
+        except Exception as e:
+            logger.error("table_creation_failed", table="credit_assessments", error=str(e))
+            return False
+
     async def initialize_all_tables(self) -> Dict[str, bool]:
         """Initialize all Lakehouse tables"""
         results = {}
@@ -837,6 +897,10 @@ class LakehouseService:
         # Escrow table
         results["escrow_transactions"] = await self.create_escrow_table()
         
+        # Credit & alternative data
+        results["alt_data_signals"] = await self.create_alt_data_signals_table()
+        results["credit_assessments"] = await self.create_credit_assessments_table()
+
         # AI/ML tables
         results["user_dimension"] = await self.create_user_dimension_table()
         results["feature_store"] = await self.create_feature_store_table()
@@ -1374,3 +1438,20 @@ def get_lakehouse_service() -> LakehouseService:
     if _lakehouse_service is None:
         _lakehouse_service = LakehouseService()
     return _lakehouse_service
+
+
+async def mirror_to_lakehouse(table_name: str, rows: List[Dict[str, Any]]) -> None:
+    """Best-effort mirror of an operational write into the Iceberg lakehouse.
+
+    Postgres stays the system of record for decisions and consent; the
+    lakehouse is the analytical/training copy. A lakehouse failure must never
+    break the operational path — errors are logged and swallowed.
+    """
+    try:
+        service = get_lakehouse_service()
+        if service.catalog is None:
+            return
+        await service.append_data(table_name, rows)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "lakehouse_mirror_failed", extra={"table": table_name, "error": str(exc)})

@@ -179,12 +179,21 @@ entity escrow {
     relation broker @user
     relation agent @user
     relation trustee @user
+    relation guarantor @user
+    relation witness @user
+    relation inspector @user
+    relation lawyer @user
     
     // Permissions
-    permission view = buyer or seller or arbitrator or broker or agent or trustee
+    permission view = buyer or seller or arbitrator or broker or agent or trustee or guarantor or witness or inspector or lawyer
     permission fund = buyer
+    permission contribute = buyer or agent
     permission release_request = seller
     permission approve_release = buyer
+    permission approve = buyer or agent or trustee
+    permission milestone_approve = buyer or agent or trustee
+    permission distribute = agent or trustee
+    permission expire = buyer or seller or agent or trustee
     permission dispute = buyer or seller
     permission resolve = arbitrator or trustee
     permission cancel = (buyer or seller) and is_pending
@@ -194,6 +203,70 @@ entity escrow {
     attribute is_pending boolean
     attribute is_disputed boolean
     attribute status string
+}
+
+// ============================================
+// VIRTUAL ACCOUNT ENTITY
+// ============================================
+entity virtual_account {
+    relation owner @user
+
+    permission view = owner
+    permission manage = owner
+    permission receive = owner
+    permission freeze = owner
+    permission close = owner
+}
+
+// ============================================
+// CREDIT ASSESSMENT ENTITY
+// ============================================
+entity credit_assessment {
+    relation subject @user
+    relation credit_officer @user
+
+    permission view = subject or credit_officer
+    permission create = subject
+}
+
+// ============================================
+// ALT DATA SOURCE ENTITY
+// ============================================
+entity alt_data_source {
+    relation owner @user
+
+    permission read = owner
+    permission write = owner
+    permission erase = owner
+}
+
+// ============================================
+// POSITIVE PAY ENTITIES
+// ============================================
+entity registered_payee {
+    relation owner @user
+
+    permission view = owner
+    permission manage = owner
+}
+
+entity payment_exception {
+    relation owner @user
+    relation reviewer @user
+
+    permission view = owner or reviewer
+    permission decide = owner or reviewer
+}
+
+// ============================================
+// BILLING ENTITY
+// ============================================
+entity billing_statement {
+    relation owner @user
+    relation billing_admin @user
+
+    permission view = owner or billing_admin
+    permission finalize = billing_admin
 }
 
 // ============================================

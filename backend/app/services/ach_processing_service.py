@@ -9,6 +9,8 @@ from enum import Enum
 import uuid
 import re
 
+from app.services import ach_sidecar_client as ach_sidecar
+
 class ACHType(str, Enum):
     CREDIT = "credit"  # Money coming in (direct deposit, refunds)
     DEBIT = "debit"    # Money going out (bill payments, transfers)
@@ -42,6 +44,7 @@ class ReturnCode(str, Enum):
     R08 = "payment_stopped"
     R09 = "uncollected_funds"
     R10 = "customer_advises_not_authorized"
+    R99 = "other_return"  # catch-all for codes outside the enum
 
 class ACHProcessingService:
     """Service for processing ACH transfers"""
@@ -284,8 +287,31 @@ class ACHProcessingService:
                 "batch_id": batch_id
             })
         
-        # Generate NACHA file
-        batch["nacha_file"] = self._generate_nacha_file(batch, ach_ids)
+        # Generate NACHA file — prefer the ach-go sidecar (moov-io/ach:
+        # correct control totals, entry hash, blocking); fall back to the
+        # local generator when the sidecar isn't deployed.
+        sidecar_entries = []
+        for ach_id in ach_ids:
+            ach = self.ach_transfers[ach_id]
+            sidecar_entries.append({
+                "transaction_code": 22 if ach["ach_type"] == ACHType.CREDIT.value else 27,
+                "routing_number": ach["recipient"]["routing_number"],
+                "account_number": ach["recipient"]["account_number"],
+                "amount_cents": int(round(ach["amount"] * 100)),
+                "recipient_name": ach["recipient"]["name"][:22],
+                "identification": ach_id[:15],
+            })
+        sidecar = await ach_sidecar.generate_nacha(
+            sidecar_entries, company_description="PAYMENTS")
+        if sidecar and sidecar.get("file"):
+            batch["nacha_file"] = sidecar["file"]
+            batch["nacha_valid"] = sidecar.get("valid", False)
+            batch["nacha_engine"] = "moov-io/ach"
+            batch["trace_numbers"] = sidecar.get("trace_numbers", [])
+        else:
+            batch["nacha_file"] = self._generate_nacha_file(batch, ach_ids)
+            batch["nacha_valid"] = None
+            batch["nacha_engine"] = "local-fallback"
         
         self.ach_batches[batch_id] = batch
         
@@ -566,28 +592,109 @@ class ACHProcessingService:
         return routing + sequence
     
     def _generate_nacha_file(self, batch: Dict[str, Any], ach_ids: List[str]) -> str:
-        """Generate NACHA file format"""
-        
-        # Simplified NACHA file format
+        """Generate a NACHA file (local fallback when ach-go sidecar is down).
+
+        Fixes vs the original hand-rolled version:
+        - entry/addenda hash = sum of 8-digit RDFI identifications (mod 10^10)
+        - batch + file control records carry real entry counts and totals
+        - file is blocked to a multiple of 10 records with all-9 fillers
+        - trace numbers are ODFI-prefixed 15-digit values
+        All records are exactly 94 characters.
+        """
+        ODFI = "02100001"          # 8-digit ODFI routing prefix
+        COMPANY_ID = "1234567890"
         lines = []
-        
+
+        def pad(line: str) -> str:
+            return line[:94].ljust(94)
+
         # File Header Record (Type 1)
-        lines.append("101 021000018 1234567890" + datetime.now().strftime("%y%m%d%H%M") + "A094101BANK NAME           COMPANY NAME           ")
-        
+        lines.append(pad(
+            "101" + " 021000018" + " " + COMPANY_ID
+            + datetime.now().strftime("%y%m%d%H%M") + "A094101"
+            + "BANK".ljust(23) + "NEOBANK".ljust(23)))
+
         # Batch Header Record (Type 5)
-        lines.append("5200COMPANY NAME                        1234567890PPDPAYROLL        " + datetime.now().strftime("%y%m%d") + "   1021000010000001")
-        
+        lines.append(pad(
+            "5200" + "NEOBANK".ljust(16) + " " * 20 + COMPANY_ID
+            + "PPD" + "PAYMENTS".ljust(10)
+            + datetime.now().strftime("%y%m%d")
+            + datetime.now().strftime("%y%m%d") + "   1"
+            + ODFI + "0000001"))
+
         # Entry Detail Records (Type 6)
-        for ach_id in ach_ids:
+        entry_hash = 0
+        entry_count = 0
+        total_credits_c = 0
+        total_debits_c = 0
+        for i, ach_id in enumerate(ach_ids, start=1):
             ach = self.ach_transfers[ach_id]
+            routing = ach["recipient"]["routing_number"].zfill(9)
+            rdfi8, check_digit = routing[:8], routing[8]
             transaction_code = "22" if ach["ach_type"] == ACHType.CREDIT.value else "27"
-            lines.append(f"6{transaction_code}{ach['recipient']['routing_number']}{ach['recipient']['account_number']}        {int(ach['amount']*100):010d}{ach['trace_number']}               0{ach['recipient']['name'][:22]:22s}  0")
-        
+            amount_c = int(round(ach["amount"] * 100))
+            if transaction_code == "22":
+                total_credits_c += amount_c
+            else:
+                total_debits_c += amount_c
+            entry_hash = (entry_hash + int(rdfi8)) % 10**10
+            entry_count += 1
+            trace = f"{ODFI}{i:07d}"
+            lines.append(pad(
+                "6" + transaction_code + rdfi8 + check_digit
+                + ach["recipient"]["account_number"][:17].ljust(17)
+                + f"{amount_c:010d}"
+                + ach_id[:15].ljust(15)
+                + ach["recipient"]["name"][:22].ljust(22)
+                + "  " + "0" + trace))
+
         # Batch Control Record (Type 8)
-        lines.append(f"82000000{len(ach_ids):06d}000000000000{int(batch['total_credits']*100):012d}000000000000{int(batch['total_debits']*100):012d}1234567890                         021000010000001")
-        
+        lines.append(pad(
+            "8200" + f"{entry_count:06d}" + f"{entry_hash:010d}"
+            + f"{total_debits_c:012d}" + f"{total_credits_c:012d}"
+            + COMPANY_ID + " " * 19 + " " * 6
+            + ODFI + "0000001"))
+
         # File Control Record (Type 9)
-        lines.append(f"9000001000001{len(ach_ids):08d}000000000000{int(batch['total_credits']*100):012d}000000000000{int(batch['total_debits']*100):012d}" + " " * 39)
-        
+        record_count = len(lines) + 1  # + this record
+        block_count = (record_count + 9) // 10
+        filler_needed = block_count * 10 - record_count
+        lines.append(pad(
+            "9" + f"{1:06d}" + f"{block_count:06d}" + f"{entry_count:08d}"
+            + f"{entry_hash:010d}"
+            + f"{total_debits_c:012d}" + f"{total_credits_c:012d}"))
+
+        # Blocking fillers
+        for _ in range(filler_needed):
+            lines.append("9" * 94)
+
         return "\n".join(lines)
 
+    async def ingest_return_file(self, file_content: str) -> Dict[str, Any]:
+        """Ingest an inbound NACHA return file from the bank: parse via the
+        ach-go sidecar and auto-process every Addenda99 return."""
+        parsed = await ach_sidecar.parse_nacha(file_content)
+        if parsed is None:
+            return {"success": False,
+                    "error": "ach sidecar unavailable — cannot parse return file"}
+        results = []
+        for ret in parsed.get("returns", []):
+            # Find the original transfer by trace number
+            ach_id = next(
+                (tid for tid, t in self.ach_transfers.items()
+                 if t.get("trace_number") == ret.get("trace_number")),
+                None)
+            if ach_id is None:
+                results.append({"trace_number": ret.get("trace_number"),
+                                "processed": False, "reason": "unknown trace"})
+                continue
+            try:
+                code = ReturnCode[ret.get("return_code", "R99")]
+            except KeyError:
+                code = ReturnCode.R99
+            out = await self.process_ach_return(
+                ach_id, code, ret.get("reason", ""))
+            results.append({"trace_number": ret.get("trace_number"),
+                            "ach_id": ach_id, "processed": out.get("success", False)})
+        return {"success": True, "returns_found": len(parsed.get("returns", [])),
+                "file_valid": parsed.get("valid", False), "results": results}

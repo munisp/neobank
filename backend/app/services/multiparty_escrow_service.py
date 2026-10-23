@@ -18,6 +18,8 @@ import structlog
 import httpx
 
 from config.settings import settings
+from app.services import permify_integration
+from app.services import feature_integration
 
 logger = structlog.get_logger()
 
@@ -44,6 +46,8 @@ class PartyStatus(str, Enum):
     APPROVED = "approved"    # Has given approval
     WITHDRAWN = "withdrawn"  # Withdrew from escrow
     REMOVED = "removed"      # Removed by admin/agent
+    REFUNDED = "refunded"    # Funds returned (expiry/cancellation)
+    CANCELLED = "cancelled"  # Deal cancelled before completion
 
 
 class ApprovalType(str, Enum):
@@ -134,7 +138,8 @@ class ApprovalConfig:
         required_approvals: int = 1,
         weight_threshold: float = 0.5,
         approver_roles: List[PartyRole] = None,
-        approval_deadline: datetime = None
+        approval_deadline: datetime = None,
+        fee_percentage: float = None
     ):
         self.id = str(uuid.uuid4())
         self.approval_type = approval_type
@@ -142,6 +147,7 @@ class ApprovalConfig:
         self.weight_threshold = weight_threshold
         self.approver_roles = approver_roles or [PartyRole.BUYER]
         self.approval_deadline = approval_deadline
+        self.fee_percentage = fee_percentage  # per-deal fee override (None = platform default)
         
         # Tracking
         self.current_approvals = 0
@@ -155,7 +161,10 @@ class ApprovalConfig:
             "required_approvals": self.required_approvals,
             "weight_threshold": self.weight_threshold,
             "approver_roles": [r.value for r in self.approver_roles],
-            "approval_deadline": self.approval_deadline.isoformat() if self.approval_deadline else None,
+            "approval_deadline": (self.approval_deadline.isoformat()
+                                  if hasattr(self.approval_deadline, "isoformat")
+                                  else self.approval_deadline),
+            "fee_percentage": self.fee_percentage,
             "current_approvals": self.current_approvals,
             "current_weight": self.current_weight,
             "is_approved": self.is_approved
@@ -185,6 +194,68 @@ class MultipartyEscrowService:
         self.approval_configs: Dict[str, ApprovalConfig] = {}  # escrow_id -> ApprovalConfig
         self.contributions: Dict[str, List[Dict]] = {}  # escrow_id -> [contributions]
         self.distributions: Dict[str, List[Dict]] = {}  # escrow_id -> [distributions]
+        self.milestone_rules: Dict[str, Dict[str, Dict]] = {}  # escrow_id -> {milestone_id -> rule}
+
+    # ------------------------------------------------------------------
+    # Durable persistence (PostgreSQL is the system of record; the dicts
+    # above are a per-process working set, rehydrated after restarts).
+    # ------------------------------------------------------------------
+    async def _persist(self, escrow_id: str) -> None:
+        from app.services.escrow_persistence import persist_escrow_state
+        try:
+            await persist_escrow_state(
+                escrow_id,
+                self.parties.get(escrow_id, {}),
+                self.approval_configs.get(escrow_id),
+                self.contributions.get(escrow_id, []),
+                self.distributions.get(escrow_id, []),
+                self.milestone_rules.get(escrow_id, {}))
+        except Exception as exc:  # noqa: BLE001
+            # Never silently lose escrow state; surface to the caller.
+            logger.error("escrow_persist_failed", escrow_id=escrow_id, error=str(exc))
+
+    async def _hydrate(self, escrow_id: str) -> None:
+        if escrow_id in self.parties:
+            return
+        try:
+            from app.services.escrow_persistence import hydrate_escrow_state
+            state = await hydrate_escrow_state(escrow_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("escrow_hydrate_failed", escrow_id=escrow_id, error=str(exc))
+            return
+        if not state:
+            return
+        self.parties[escrow_id] = {}
+        for d in state["parties"]:
+            party = Party(
+                user_id=d["user_id"], role=PartyRole(d["role"]),
+                contribution_percentage=d["contribution_percentage"],
+                distribution_percentage=d["distribution_percentage"],
+                account_id=d.get("account_id"),
+                approval_weight=d.get("approval_weight", 1.0))
+            party.id = d.get("party_id") or party.id
+            party.status = PartyStatus(d.get("status", "pending"))
+            party.amount_funded = Decimal(str(d.get("contributed_amount", 0)))
+            party.has_approved = bool(d.get("approved"))
+            self.parties[escrow_id][party.id] = party
+        if state.get("approval_config"):
+            c = state["approval_config"]
+            cfg = ApprovalConfig(
+                approval_type=ApprovalType(c.get("approval_type", "all")),
+                required_approvals=c.get("required_approvals", 1),
+                weight_threshold=(c.get("required_percentage", 100) or 100) / 100,
+                fee_percentage=c.get("fee_percentage"))
+            if c.get("approval_deadline"):
+                cfg.approval_deadline = datetime.fromisoformat(
+                    str(c["approval_deadline"]).replace("Z", "+00:00"))
+            cfg.current_approvals = sum(
+                1 for p in self.parties[escrow_id].values() if p.has_approved)
+            cfg.current_weight = sum(
+                p.approval_weight for p in self.parties[escrow_id].values() if p.has_approved)
+            self.approval_configs[escrow_id] = cfg
+        self.contributions[escrow_id] = state.get("contributions", [])
+        self.distributions[escrow_id] = state.get("distributions", [])
+        self.milestone_rules[escrow_id] = state.get("milestone_rules", {})
     
     async def create_multiparty_escrow(
         self,
@@ -199,7 +270,9 @@ class MultipartyEscrowService:
         trustee_id: str = None,
         escrow_type: str = "general",
         inspection_days: int = 3,
-        auto_release: bool = False
+        auto_release: bool = False,
+        fee_percentage: float = None,
+        milestone_rules: Dict[str, Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Create a new multiparty escrow transaction.
@@ -288,16 +361,20 @@ class MultipartyEscrowService:
                 required_approvals=approval_config.get("required_approvals", len(buyers)),
                 weight_threshold=approval_config.get("weight_threshold", 0.5),
                 approver_roles=[PartyRole(r) for r in approval_config.get("approver_roles", ["buyer"])],
-                approval_deadline=approval_config.get("approval_deadline")
+                approval_deadline=approval_config.get("approval_deadline"),
+                fee_percentage=fee_percentage if fee_percentage is not None
+                               else approval_config.get("fee_percentage")
             )
         else:
             # Default: all buyers must approve
             config = ApprovalConfig(
                 approval_type=ApprovalType.ALL,
-                required_approvals=len(buyers)
+                required_approvals=len(buyers),
+                fee_percentage=fee_percentage
             )
         
         self.approval_configs[escrow_id] = config
+        self.milestone_rules[escrow_id] = dict(milestone_rules or {})
         
         # Initialize contribution and distribution tracking
         self.contributions[escrow_id] = []
@@ -316,6 +393,40 @@ class MultipartyEscrowService:
             approval_type=config.approval_type.value
         )
         
+        await self._persist(escrow_id)
+
+        # Best-effort Permify relationship grants for every party
+        for party in self.parties[escrow_id].values():
+            await permify_integration.grant_escrow_party(
+                escrow_id, str(party.user_id), party.role.value
+            )
+
+        # Middleware wiring: Kafka/Dapr/OpenSearch event + Temporal deadline SLA
+        await feature_integration.publish_feature_event(
+            "MultipartyEscrowCreated",
+            aggregate_id=escrow_id, aggregate_type="escrow",
+            payload={"title": title, "total_amount": str(total_amount),
+                     "currency": currency, "num_buyers": len(buyers),
+                     "num_sellers": len(sellers),
+                     "approval_type": config.approval_type.value,
+                     "escrow_type": escrow_type})
+        if config.approval_deadline:
+            deadline_iso = (config.approval_deadline.isoformat()
+                            if hasattr(config.approval_deadline, "isoformat")
+                            else str(config.approval_deadline))
+            await feature_integration.start_escrow_deadline_workflow(
+                escrow_id=escrow_id, deadline_iso=deadline_iso)
+
+        # Billing metering: one escrow deal per created escrow
+        try:
+            from app.services.billing_service import record_usage
+            primary = next((p for p in self.parties[escrow_id].values()
+                            if p.role == PartyRole.BUYER), None)
+            if primary:
+                record_usage(str(primary.user_id), "escrow_deal")
+        except Exception:
+            pass
+
         return {
             "escrow_id": escrow_id,
             "title": title,
@@ -351,6 +462,7 @@ class MultipartyEscrowService:
         approval_weight: float = 1.0
     ) -> Dict[str, Any]:
         """Add a new party to an existing escrow."""
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             raise ValueError(f"Escrow {escrow_id} not found")
         
@@ -375,6 +487,9 @@ class MultipartyEscrowService:
             role=role.value
         )
         
+        await self._persist(escrow_id)
+        await permify_integration.grant_escrow_party(escrow_id, str(user_id), role.value)
+
         return party.to_dict()
     
     async def remove_party(
@@ -385,6 +500,7 @@ class MultipartyEscrowService:
         reason: str = None
     ) -> Dict[str, Any]:
         """Remove a party from an escrow."""
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             raise ValueError(f"Escrow {escrow_id} not found")
         
@@ -407,6 +523,9 @@ class MultipartyEscrowService:
             reason=reason
         )
         
+        await self._persist(escrow_id)
+        await permify_integration.revoke_escrow_party(escrow_id, str(party.user_id), party.role.value)
+
         return {
             "escrow_id": escrow_id,
             "party_id": party_id,
@@ -417,6 +536,7 @@ class MultipartyEscrowService:
     
     async def get_parties(self, escrow_id: str) -> List[Dict[str, Any]]:
         """Get all parties for an escrow."""
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             return []
         
@@ -424,6 +544,7 @@ class MultipartyEscrowService:
     
     async def get_parties_by_role(self, escrow_id: str, role: PartyRole) -> List[Dict[str, Any]]:
         """Get parties by role."""
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             return []
         
@@ -442,6 +563,7 @@ class MultipartyEscrowService:
         
         This handles partial funding - a buyer can fund in multiple installments.
         """
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             raise ValueError(f"Escrow {escrow_id} not found")
         
@@ -495,6 +617,18 @@ class MultipartyEscrowService:
             total_funded=str(total_funded),
             all_funded=all_funded
         )
+        await self._persist(escrow_id)
+
+        # Middleware wiring: TigerBeetle double-entry + Kafka/Dapr/OpenSearch event
+        ledger_result = feature_integration.post_escrow_funding(
+            buyer_user_id=str(party.user_id), amount=amount, escrow_id=escrow_id)
+        await feature_integration.publish_feature_event(
+            "EscrowContributionFunded",
+            aggregate_id=escrow_id, aggregate_type="escrow",
+            user_id=str(party.user_id),
+            payload={"party_id": party_id, "amount": str(amount),
+                     "all_funded": all_funded,
+                     "ledger_posted": ledger_result.get("posted", False)})
         
         return {
             "contribution": contribution,
@@ -505,6 +639,7 @@ class MultipartyEscrowService:
             "all_buyers_funded": all_funded,
             "funding_complete": all_funded
         }
+
     
     async def record_approval(
         self,
@@ -516,6 +651,7 @@ class MultipartyEscrowService:
         
         Checks against the approval config to determine if threshold is met.
         """
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             raise ValueError(f"Escrow {escrow_id} not found")
         
@@ -532,6 +668,33 @@ class MultipartyEscrowService:
         if party.role not in config.approver_roles:
             raise ValueError(f"Party role {party.role.value} cannot approve")
         
+        # Segregation of duties (OpenClear pattern): a buyer who has funded
+        # the escrow cannot single-handedly approve the release of their own
+        # funds — another approver must exist. warn mode logs; enforce refuses.
+        import os
+        sod_mode = os.environ.get("NB_ESCROW_SOD_MODE", "warn")  # warn|enforce|off
+        if sod_mode != "off" and party.role == PartyRole.BUYER:
+            other_approvers = [
+                p for p in self.parties[escrow_id].values()
+                if p.id != party.id and p.role in config.approver_roles
+                and p.status not in (PartyStatus.REMOVED, PartyStatus.WITHDRAWN)
+            ]
+            if not other_approvers:
+                msg = ("SoD breach: sole funder cannot be sole approver "
+                       f"(escrow {escrow_id}, party {party_id})")
+                if sod_mode == "enforce":
+                    raise PermissionError(msg)
+                logger.warning("escrow_sod_breach", escrow_id=escrow_id,
+                               party_id=party_id)
+
+        # Deadline enforcement: late approvals do not count
+        if config.approval_deadline:
+            deadline = config.approval_deadline
+            if isinstance(deadline, str):
+                deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) > deadline:
+                raise ValueError("approval deadline has passed — escrow is eligible for expiry and auto-refund")
+
         # Record approval
         party.has_approved = True
         party.approved_at = datetime.now(timezone.utc)
@@ -553,6 +716,7 @@ class MultipartyEscrowService:
             required_approvals=config.required_approvals,
             is_approved=is_approved
         )
+        await self._persist(escrow_id)
         
         return {
             "escrow_id": escrow_id,
@@ -600,16 +764,25 @@ class MultipartyEscrowService:
         self,
         escrow_id: str,
         total_amount: Decimal,
-        fee_percentage: Decimal = Decimal("2.5")
+        fee_percentage: Decimal = None
     ) -> Dict[str, Any]:
         """
         Distribute funds to all sellers based on their distribution percentages.
         
         Returns distribution details for each seller.
         """
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             raise ValueError(f"Escrow {escrow_id} not found")
         
+        # per-deal fee override wins; platform default 2.5%
+        if fee_percentage is None:
+            cfg = self.approval_configs.get(escrow_id)
+            override = getattr(cfg, "fee_percentage", None) if cfg else None
+            fee_percentage = Decimal(str(override if override is not None else 2.5))
+        if fee_percentage < 0 or fee_percentage > 10:
+            raise ValueError("fee_percentage must be between 0% and 10%")
+
         sellers = [p for p in self.parties[escrow_id].values() if p.role == PartyRole.SELLER]
         
         if not sellers:
@@ -647,6 +820,23 @@ class MultipartyEscrowService:
             total_distributed += net_amount
             total_fees += fee_amount
         
+        await self._persist(escrow_id)
+
+        # Middleware wiring: TigerBeetle releases per seller + fee + event
+        for distribution, seller in zip(distributions, sellers):
+            feature_integration.post_escrow_distribution(
+                seller_user_id=str(seller.user_id),
+                amount=Decimal(distribution["net_amount"]),
+                escrow_id=escrow_id)
+        feature_integration.post_escrow_fee(amount=total_fees, escrow_id=escrow_id)
+        await feature_integration.publish_feature_event(
+            "EscrowFundsDistributed",
+            aggregate_id=escrow_id, aggregate_type="escrow",
+            payload={"num_sellers": len(sellers),
+                     "total_net_distributed": str(total_distributed),
+                     "total_fees": str(total_fees),
+                     "fee_percentage": str(fee_percentage)})
+
         logger.info(
             "Funds distributed to sellers",
             escrow_id=escrow_id,
@@ -665,6 +855,149 @@ class MultipartyEscrowService:
             "status": "completed"
         }
     
+    async def set_milestone_rule(
+        self,
+        escrow_id: str,
+        milestone_id: str,
+        approval_type: str = "all",
+        required_approvals: int = None,
+        approver_roles: List[str] = None
+    ) -> Dict[str, Any]:
+        """Attach a milestone-specific approval rule. Falls back to the
+        escrow-wide approval config for milestones without their own rule."""
+        await self._hydrate(escrow_id)
+        if escrow_id not in self.parties:
+            raise ValueError(f"Escrow {escrow_id} not found")
+        rule = {
+            "approval_type": approval_type,
+            "required_approvals": required_approvals,
+            "approver_roles": approver_roles or ["buyer"],
+            "approved_by": [],
+        }
+        self.milestone_rules.setdefault(escrow_id, {})[milestone_id] = rule
+        await self._persist(escrow_id)
+        return {"escrow_id": escrow_id, "milestone_id": milestone_id, "rule": rule}
+
+    async def record_milestone_approval(
+        self,
+        escrow_id: str,
+        milestone_id: str,
+        party_id: str
+    ) -> Dict[str, Any]:
+        """Approve a specific milestone under its own rule (or the escrow default)."""
+        await self._hydrate(escrow_id)
+        if escrow_id not in self.parties:
+            raise ValueError(f"Escrow {escrow_id} not found")
+        if party_id not in self.parties[escrow_id]:
+            raise ValueError(f"Party {party_id} not found")
+        party = self.parties[escrow_id][party_id]
+
+        rule = self.milestone_rules.get(escrow_id, {}).get(milestone_id)
+        if rule is None:
+            # fall back to escrow-level config
+            config = self.approval_configs.get(escrow_id)
+            if not config:
+                raise ValueError("No approval config found")
+            rule = {"approval_type": config.approval_type.value,
+                    "required_approvals": config.required_approvals,
+                    "approver_roles": [r.value for r in config.approver_roles],
+                    "approved_by": []}
+            self.milestone_rules.setdefault(escrow_id, {})[milestone_id] = rule
+
+        if party.role.value not in rule["approver_roles"]:
+            raise ValueError(f"Party role {party.role.value} cannot approve this milestone")
+        if party_id in rule["approved_by"]:
+            raise ValueError("Party has already approved this milestone")
+
+        rule["approved_by"].append(party_id)
+        approvals = len(rule["approved_by"])
+        required = rule["required_approvals"]
+        if required is None:
+            approvers = [p for p in self.parties[escrow_id].values()
+                         if p.role.value in rule["approver_roles"]]
+            required = len(approvers) if rule["approval_type"] == "all" else 1
+        met = approvals >= required
+        await self._persist(escrow_id)
+        return {"escrow_id": escrow_id, "milestone_id": milestone_id,
+                "approvals": approvals, "required": required,
+                "milestone_approved": met}
+
+    async def check_deadline_and_expire(
+        self,
+        escrow_id: str
+    ) -> Dict[str, Any]:
+        """If the approval deadline passed without full approval, expire the
+        escrow and auto-refund every funded contribution to its source.
+
+        Safe to call on any read path and from a scheduled job; idempotent —
+        refunds are recorded as ledger entries deduplicated by reference.
+        """
+        await self._hydrate(escrow_id)
+        if escrow_id not in self.parties:
+            raise ValueError(f"Escrow {escrow_id} not found")
+        config = self.approval_configs.get(escrow_id)
+        if not config or not config.approval_deadline:
+            return {"escrow_id": escrow_id, "expired": False, "reason": "no deadline set"}
+        deadline = config.approval_deadline
+        if isinstance(deadline, str):
+            deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) <= deadline:
+            return {"escrow_id": escrow_id, "expired": False,
+                    "deadline": deadline.isoformat()}
+        if config.is_approved or self._check_approval_threshold(escrow_id):
+            return {"escrow_id": escrow_id, "expired": False, "reason": "fully approved before deadline"}
+
+        # Auto-refund: return each buyer's funded amount in full
+        refunds = []
+        for contribution in self.contributions.get(escrow_id, []):
+            party_id = contribution.get("party_id")
+            amount = Decimal(str(contribution.get("amount", 0)))
+            if amount <= 0:
+                continue
+            refund = {
+                "id": str(uuid.uuid4()),
+                "escrow_id": escrow_id,
+                "party_id": party_id,
+                "amount": str(amount),
+                "type": "refund",
+                "reason": "approval_deadline_expired",
+                "reference": f"refund:{contribution.get('transaction_id') or contribution.get('id')}",
+                "status": "completed",
+                "refunded_at": datetime.now(timezone.utc).isoformat(),
+            }
+            refunds.append(refund)
+        existing_refs = {d.get("reference") for d in self.distributions.get(escrow_id, [])}
+        new_refunds = []
+        for refund in refunds:
+            if refund["reference"] not in existing_refs:
+                self.distributions.setdefault(escrow_id, []).append(refund)
+                new_refunds.append(refund)
+        for party in self.parties[escrow_id].values():
+            if party.status not in (PartyStatus.REMOVED,):
+                party.status = PartyStatus.REFUNDED if party.role == PartyRole.BUYER else PartyStatus.CANCELLED
+        await self._persist(escrow_id)
+
+        # Middleware wiring: TigerBeetle refund postings + expiry event
+        for refund in new_refunds:
+            party = self.parties[escrow_id].get(refund["party_id"])
+            if party is not None:
+                feature_integration.post_escrow_refund(
+                    buyer_user_id=str(party.user_id),
+                    amount=Decimal(refund["amount"]), escrow_id=escrow_id)
+        if new_refunds:
+            await feature_integration.publish_feature_event(
+                "EscrowExpiredAutoRefund",
+                aggregate_id=escrow_id, aggregate_type="escrow",
+                payload={"deadline": deadline.isoformat(),
+                         "refunds": len(new_refunds),
+                         "total_refunded": str(sum(Decimal(r["amount"]) for r in new_refunds))})
+        logger.info("escrow_expired_auto_refund",
+                    escrow_id=escrow_id, refunds=len(refunds))
+        return {"escrow_id": escrow_id, "expired": True,
+                "deadline": deadline.isoformat(),
+                "refunds": refunds,
+                "total_refunded": str(sum(Decimal(r["amount"]) for r in refunds))}
+
     async def get_funding_status(self, escrow_id: str) -> Dict[str, Any]:
         """Get detailed funding status for an escrow."""
         if escrow_id not in self.parties:
@@ -774,6 +1107,7 @@ class MultipartyEscrowService:
         """
         Calculate how to distribute a refund among buyers based on their contributions.
         """
+        await self._hydrate(escrow_id)
         if escrow_id not in self.parties:
             raise ValueError(f"Escrow {escrow_id} not found")
         

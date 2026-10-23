@@ -958,3 +958,262 @@ class StablecoinTransfer(Base, TimestampMixin):
         Index('idx_stablecoin_transfers_wallet', 'wallet_id'),
     )
     wallet = relationship("StablecoinWallet", backref="transfers")
+
+
+class CreditAssessment(Base, TimestampMixin):
+    """Persisted credit decision — full audit trail for regulators and ML retraining."""
+    __tablename__ = "credit_assessments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    product = Column(String(32), nullable=False, default="loan")
+    requested_amount = Column(Numeric(18, 2), nullable=True)
+    credit_score = Column(Numeric(5, 1), nullable=False)
+    grade = Column(String(2), nullable=False)
+    decision = Column(String(24), nullable=False)
+    probability_of_default = Column(Numeric(6, 4), nullable=True)
+    authenticity_score = Column(Numeric(4, 3), nullable=True)
+    authenticity_grade = Column(String(16), nullable=True)
+    model_version = Column(String(64), nullable=True)
+    max_limit = Column(Numeric(18, 2), nullable=True)
+    suggested_rate_pct = Column(Numeric(5, 2), nullable=True)
+    reasons = Column(JSONB, default=list)
+    context = Column(JSONB, default=dict)
+
+    __table_args__ = (
+        Index("idx_credit_assessments_user", "user_id"),
+    )
+
+
+class AltDataConsent(Base, TimestampMixin):
+    """NDPR consent record for alternative-data ingestion."""
+    __tablename__ = "alt_data_consents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String(24), nullable=False)     # sms|statement|aggregator|telco|utility|self_declared
+    purpose = Column(String(64), nullable=False, default="credit_assessment")
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_alt_data_consents_user", "user_id"),
+    )
+
+
+class AltDataSignal(Base, TimestampMixin):
+    """Normalised alternative-data signal feeding the credit pipeline."""
+    __tablename__ = "alt_data_signals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String(24), nullable=False)
+    signal_type = Column(String(32), nullable=False)  # bank_credit|bank_debit|telco_payment|utility_payment
+    amount = Column(Numeric(18, 2), nullable=False)
+    balance_after = Column(Numeric(18, 2), nullable=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
+    trust = Column(Numeric(3, 2), nullable=False, default=0.5)
+    raw = Column(JSONB, default=dict)
+    # signed-upload evidence (statement CSVs)
+    source_sha256 = Column(String(64), nullable=True)
+    source_signature = Column(String(128), nullable=True)
+
+    __table_args__ = (
+        Index("idx_alt_data_signals_user", "user_id", "occurred_at"),
+    )
+
+
+class EscrowParty(Base, TimestampMixin):
+    """Persisted multiparty-escrow participant (replaces in-memory dicts)."""
+    __tablename__ = "escrow_parties"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    escrow_id = Column(String(64), nullable=False)
+    user_id = Column(String(64), nullable=False)
+    role = Column(String(24), nullable=False)          # buyer|seller|agent|trustee|guarantor
+    status = Column(String(24), nullable=False, default="pending")
+    account_id = Column(String(64), nullable=True)
+    contribution_percentage = Column(Numeric(5, 2), default=0)
+    distribution_percentage = Column(Numeric(5, 2), default=0)
+    contributed_amount = Column(Numeric(18, 2), default=0)
+    approval_weight = Column(Numeric(5, 2), default=1)
+    approved = Column(String(8), default="false")      # "true"/"false" (portable)
+    party_metadata = Column(JSONB, default=dict)
+
+    __table_args__ = (
+        Index("idx_escrow_parties_escrow", "escrow_id"),
+    )
+
+
+class EscrowApprovalConfig(Base, TimestampMixin):
+    """N-of-M / weighted approval rules for a multiparty escrow."""
+    __tablename__ = "escrow_approval_configs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    escrow_id = Column(String(64), nullable=False, unique=True)
+    approval_type = Column(String(24), nullable=False, default="all")
+    required_approvals = Column(Integer, default=1)
+    required_percentage = Column(Numeric(5, 2), default=100)
+    require_agent_approval = Column(String(8), default="false")
+    auto_release_after_inspection = Column(String(8), default="false")
+    fee_percentage = Column(Numeric(5, 2), nullable=True)          # per-deal override
+    approval_deadline = Column(DateTime(timezone=True), nullable=True)
+    milestone_rules = Column(JSONB, default=dict)
+
+
+class EscrowLedgerEntry(Base, TimestampMixin):
+    """Contributions and distributions for multiparty escrows."""
+    __tablename__ = "escrow_ledger_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    escrow_id = Column(String(64), nullable=False)
+    party_id = Column(String(64), nullable=False)
+    entry_type = Column(String(16), nullable=False)    # contribution|distribution|refund
+    amount = Column(Numeric(18, 2), nullable=False)
+    reference = Column(String(64), nullable=True)
+    entry_metadata = Column(JSONB, default=dict)
+
+    __table_args__ = (
+        Index("idx_escrow_ledger_escrow", "escrow_id"),
+    )
+
+
+class VirtualAccount(Base, TimestampMixin):
+    """User-created virtual account number mapped to a primary wallet.
+
+    Lets a user receive bank transfers into a dedicated NUBAN-style number —
+    per client, per project, or per savings goal — while funds settle into
+    their primary account with full attribution.
+    """
+    __tablename__ = "virtual_accounts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    account_number = Column(String(10), nullable=False, unique=True)
+    account_name = Column(String(128), nullable=False)
+    label = Column(String(64), nullable=True)          # "Client: ABC Ltd", "Rent 2026"
+    purpose = Column(String(24), nullable=False, default="collections")  # collections|escrow|savings|gig
+    linked_account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=True)
+    escrow_id = Column(String(64), nullable=True)      # set when purpose == escrow
+    status = Column(String(16), nullable=False, default="active")  # active|frozen|closed
+    va_metadata = Column(JSONB, default=dict)
+
+    __table_args__ = (
+        Index("idx_virtual_accounts_user", "user_id"),
+    )
+
+
+# ============================================================================
+# Trust fabric: hash-chained audit log, positive pay, billing, control tests
+# (inspired by OpenClear's tamper-evident action log, positive pay exception
+# review loop, fee-schedule billing, and model-risk control testing)
+# ============================================================================
+
+
+class AuditChainEntry(Base):
+    """Tamper-evident, hash-chained audit entry. Each entry's hash covers its
+    own fields plus the previous entry's hash, so deletion or reordering —
+    not just edits — breaks the chain."""
+    __tablename__ = "audit_chain_entries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sequence = Column(Integer, nullable=False)         # per-domain ordering
+    domain = Column(String(32), nullable=False, default="platform")  # escrow|credit|alt_data|virtual_account|billing|positive_pay
+    action = Column(String(64), nullable=False)        # e.g. escrow.fund
+    actor_id = Column(String(64), nullable=True)
+    aggregate_id = Column(String(64), nullable=True)
+    payload = Column(JSONB, default=dict)
+    prev_hash = Column(String(64), nullable=False)
+    entry_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_audit_chain_domain_seq", "domain", "sequence", unique=True),
+    )
+
+
+class RegisteredPayee(Base):
+    """Positive-pay style allowlist entry: a payee the user has declared
+    intent to pay, with limits. Transfers outside the allowlist become
+    review exceptions instead of silent debits."""
+    __tablename__ = "registered_payees"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    payee_account = Column(String(32), nullable=False)   # account number / VA number
+    payee_name = Column(String(128), nullable=False)
+    bank_code = Column(String(16), nullable=True)
+    max_single_amount = Column(Numeric(18, 2), nullable=True)   # None = no cap
+    daily_limit = Column(Numeric(18, 2), nullable=True)
+    category = Column(String(32), nullable=True)          # vendor|salary|rent|...
+    status = Column(String(16), nullable=False, default="active")  # active|suspended
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_registered_payees_user", "user_id"),
+        UniqueConstraint("user_id", "payee_account", name="uq_payee_user_account"),
+    )
+
+
+class PaymentException(Base):
+    """A transfer that failed positive-pay verification and awaits a human
+    pay/reject decision. Decisions become labeled training data (the ML
+    feedback loop)."""
+    __tablename__ = "payment_exceptions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    transfer_reference = Column(String(64), nullable=False, unique=True)
+    payee_account = Column(String(32), nullable=False)
+    payee_name = Column(String(128), nullable=True)
+    amount = Column(Numeric(18, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="NGN")
+    reason = Column(String(64), nullable=False)      # unregistered_payee|over_single_limit|over_daily_limit|dormant_payee
+    risk_score = Column(Numeric(5, 4), nullable=True)  # model recommendation
+    recommendation = Column(String(16), nullable=True)  # pay|review|reject
+    status = Column(String(24), nullable=False, default="open")  # open|paid|rejected|withdrawn
+    decided_by = Column(String(64), nullable=True)
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+    decision_note = Column(String(512), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_payment_exceptions_user_status", "user_id", "status"),
+    )
+
+
+class FeeScheduleItem(Base):
+    """One billable metric in a fee schedule (per-item, per-account,
+    per-exception...), with optional step tiers and a monthly minimum."""
+    __tablename__ = "fee_schedule_items"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    schedule = Column(String(32), nullable=False, default="default")
+    metric = Column(String(48), nullable=False)      # escrow_deal|virtual_account|credit_assessment|bnpl_purchase|sms_alert...
+    unit_price = Column(Numeric(18, 4), nullable=False, default=0)
+    currency = Column(String(3), nullable=False, default="NGN")
+    tiers = Column(JSONB, default=list)              # [{"up_to": 10, "unit_price": "..."}]
+    monthly_minimum = Column(Numeric(18, 2), nullable=True)
+    active = Column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        UniqueConstraint("schedule", "metric", name="uq_fee_schedule_metric"),
+    )
+
+
+class BillingStatement(Base):
+    """Frozen monthly statement per user (or account-analysis style roll-up)."""
+    __tablename__ = "billing_statements"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    period = Column(String(7), nullable=False)       # YYYY-MM
+    lines = Column(JSONB, default=list)              # [{metric, quantity, unit_price, amount}]
+    total = Column(Numeric(18, 2), nullable=False, default=0)
+    currency = Column(String(3), nullable=False, default="NGN")
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String(16), nullable=False, default="finalized")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_billing_statements_user_period", "user_id", "period"),
+    )

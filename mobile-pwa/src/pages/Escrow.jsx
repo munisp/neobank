@@ -19,8 +19,17 @@ const Escrow = () => {
   const [templates, setTemplates] = useState([]);
   const [error, setError] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [multiparty, setMultiparty] = useState(false);
   const [form, setForm] = useState({ title: '', amount: '', counterparty: '' });
+  const [group, setGroup] = useState({ buyers: '', sellers: '', approvals: 'all', fee: '', deadline: '' });
   const haptics = useHaptics();
+
+  // "userId1:40, userId2:60" → [{user_id, contribution_percentage}]
+  const parseParties = (text, key) => text.split(',').map((s) => s.trim()).filter(Boolean)
+    .map((s) => {
+      const [id, pct] = s.split(':').map((x) => x.trim());
+      return { user_id: id, [key]: Number(pct || 0) };
+    });
 
   const load = useCallback(async () => {
     setError(false);
@@ -41,13 +50,32 @@ const Escrow = () => {
   const create = async () => {
     setCreating(true);
     try {
-      await ApiService.post('/escrow/', {
-        title: form.title,
-        amount: Number(form.amount),
-        counterparty: form.counterparty,
-      });
+      if (multiparty) {
+        const buyers = parseParties(group.buyers, 'contribution_percentage');
+        const sellers = parseParties(group.sellers, 'distribution_percentage');
+        await ApiService.post('/escrow/multiparty', {
+          title: form.title,
+          total_amount: Number(form.amount),
+          buyers, sellers,
+          approval_config: {
+            approval_type: group.approvals,
+            required_approvals: buyers.length,
+            ...(group.deadline ? { approval_deadline: new Date(group.deadline).toISOString() } : {}),
+          },
+          ...(group.fee ? { fee_percentage: Number(group.fee) } : {}),
+          escrow_type: 'general',
+        });
+      } else {
+        await ApiService.post('/escrow/', {
+          title: form.title,
+          amount: Number(form.amount),
+          counterparty: form.counterparty,
+        });
+      }
       haptics.success();
       setForm({ title: '', amount: '', counterparty: '' });
+      setGroup({ buyers: '', sellers: '', approvals: 'all', fee: '', deadline: '' });
+      setMultiparty(false);
       await load();
     } finally {
       setCreating(false);
@@ -78,10 +106,40 @@ const Escrow = () => {
             onChange={(e) => setForm({ ...form, title: e.target.value })} />
           <NBInput label="Amount (₦)" type="number" placeholder="850000" value={form.amount}
             onChange={(e) => setForm({ ...form, amount: e.target.value })} />
-          <NBInput label="Counterparty (phone or email)" placeholder="0803… or name@mail.com" value={form.counterparty}
-            onChange={(e) => setForm({ ...form, counterparty: e.target.value })} />
-          <NBButton variant="primary" onClick={create} disabled={creating || !form.title || !form.amount} style={{ width: '100%' }}>
-            {creating ? 'Creating…' : 'Create protected deal'}
+          {!multiparty && (
+            <NBInput label="Counterparty (phone or email)" placeholder="0803… or name@mail.com" value={form.counterparty}
+              onChange={(e) => setForm({ ...form, counterparty: e.target.value })} />
+          )}
+          <button type="button" onClick={() => setMultiparty(!multiparty)} className="text-xs font-medium"
+            style={{ color: 'var(--nb-brand-600)' }}>
+            {multiparty ? '− Switch back to a simple deal' : '+ Group deal? Multiple buyers, sellers or co-owners'}
+          </button>
+          {multiparty && (
+            <div className="space-y-2 pt-1" style={{ borderTop: '1px solid var(--nb-border-subtle)' }}>
+              <p className="text-xs" style={{ color: 'var(--nb-text-secondary)' }}>
+                Format: <code>userId:percent</code>, comma-separated. Percentages must total 100 per side.
+              </p>
+              <NBInput label="Buyers & contributions" placeholder="ada:60, chidi:40" value={group.buyers}
+                onChange={(e) => setGroup({ ...group, buyers: e.target.value })} />
+              <NBInput label="Sellers & distributions" placeholder="obi:75, ngozi:25" value={group.sellers}
+                onChange={(e) => setGroup({ ...group, sellers: e.target.value })} />
+              <NBInput label="Approval rule" placeholder="all · majority · any" value={group.approvals}
+                onChange={(e) => setGroup({ ...group, approvals: e.target.value })} />
+              <div className="grid grid-cols-2 gap-2">
+                <NBInput label="Fee % (optional)" type="number" placeholder="2.5" value={group.fee}
+                  onChange={(e) => setGroup({ ...group, fee: e.target.value })} />
+                <NBInput label="Approval deadline (optional)" type="date" value={group.deadline}
+                  onChange={(e) => setGroup({ ...group, deadline: e.target.value })} />
+              </div>
+              <p className="text-xs" style={{ color: 'var(--nb-text-secondary)' }}>
+                If the deadline passes without full approval, every contribution is auto-refunded in full.
+              </p>
+            </div>
+          )}
+          <NBButton variant="primary" onClick={create}
+            disabled={creating || !form.title || !form.amount || (multiparty && (!group.buyers || !group.sellers))}
+            style={{ width: '100%' }}>
+            {creating ? 'Creating…' : multiparty ? 'Create group escrow' : 'Create protected deal'}
           </NBButton>
         </div>
       </NBCard>

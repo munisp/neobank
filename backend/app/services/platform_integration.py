@@ -47,6 +47,7 @@ SYSTEM_ACCOUNTS = {
     "mortgage_pool": AccountCode.MORTGAGE_POOL,
     "settlement_clearing": AccountCode.SETTLEMENT_CLEARING,
     "fee_revenue": AccountCode.REVENUE,
+    "escrow_holding": AccountCode.ESCROW_HOLDING,
 }
 
 # ledger per system account
@@ -56,6 +57,7 @@ ACCOUNT_LEDGER = {
     "mortgage_pool": Ledger.MORTGAGE,
     "settlement_clearing": Ledger.PLATFORM_SETTLEMENT,
     "fee_revenue": Ledger.FEE,
+    "escrow_holding": Ledger.ESCROW_HOLDING,
 }
 
 

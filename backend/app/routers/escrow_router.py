@@ -7,7 +7,7 @@ This router integrates with:
 - Escrow Account Service (TigerBeetle ledger for fund movements)
 """
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field
 from datetime import datetime
 from decimal import Decimal
@@ -582,6 +582,47 @@ async def get_escrow_transactions(escrow_id: str, limit: int = 50):
     return {"escrow_id": escrow_id, "transactions": transactions}
 
 
+class MilestoneRuleRequest(BaseModel):
+    approval_type: str = "all"
+    required_approvals: Optional[int] = None
+    approver_roles: Optional[List[str]] = None
+
+
+class MilestoneApprovalRequest(BaseModel):
+    party_id: str
+
+
+@router.post("/{escrow_id}/milestones/{milestone_id}/rules")
+async def set_milestone_rule(escrow_id: str, milestone_id: str, request: MilestoneRuleRequest):
+    """Attach a milestone-specific approval rule (falls back to escrow default)."""
+    try:
+        return await multiparty_escrow_service.set_milestone_rule(
+            escrow_id, milestone_id, request.approval_type,
+            request.required_approvals, request.approver_roles)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{escrow_id}/milestones/{milestone_id}/approvals")
+async def approve_milestone(escrow_id: str, milestone_id: str, request: MilestoneApprovalRequest):
+    """Approve a specific milestone under its own rule."""
+    try:
+        return await multiparty_escrow_service.record_milestone_approval(
+            escrow_id, milestone_id, request.party_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{escrow_id}/check-expiry")
+async def check_escrow_expiry(escrow_id: str):
+    """Expire and auto-refund if the approval deadline passed without approval.
+    Idempotent — safe to call from clients or a scheduled job."""
+    try:
+        return await multiparty_escrow_service.check_deadline_and_expire(escrow_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("/disputes/{dispute_id}")
 async def get_dispute(dispute_id: str):
     """Get dispute details"""
@@ -689,6 +730,8 @@ class CreateMultipartyEscrowRequest(BaseModel):
     escrow_type: str = "general"
     inspection_days: int = 3
     auto_release: bool = False
+    fee_percentage: Optional[float] = None      # per-deal fee override (0–10)
+    milestone_rules: Optional[Dict[str, Dict[str, Any]]] = None  # per-milestone approval rules
 
 
 class AddPartyRequest(BaseModel):
@@ -757,7 +800,9 @@ async def create_multiparty_escrow(request: CreateMultipartyEscrowRequest):
             trustee_id=request.trustee_id,
             escrow_type=request.escrow_type,
             inspection_days=request.inspection_days,
-            auto_release=request.auto_release
+            auto_release=request.auto_release,
+            fee_percentage=request.fee_percentage,
+            milestone_rules=request.milestone_rules
         )
         
         return result

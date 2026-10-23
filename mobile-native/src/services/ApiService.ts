@@ -1024,6 +1024,147 @@ class ApiService {
     const response = await this.client.get('/fx/currencies');
     return response.data;
   }
+
+  // ---- Credit pipeline ----
+  async getCreditScore() {
+    const response = await this.client.get('/credit/score');
+    return response.data;
+  }
+
+  // ---- Alternative data ----
+  async getAltDataSummary() {
+    const response = await this.client.get('/alt-data/summary');
+    return response.data;
+  }
+
+  async grantAltDataConsent(source: string) {
+    const response = await this.client.post('/alt-data/consent', { source });
+    return response.data;
+  }
+
+  async withdrawAltDataConsent(source: string) {
+    const response = await this.client.delete(`/alt-data/consent/${source}`);
+    return response.data;
+  }
+
+  // ---- Virtual accounts ----
+  async getVirtualAccounts() {
+    const response = await this.client.get('/virtual-accounts');
+    return response.data;
+  }
+
+  async createVirtualAccount(data: { account_name: string; label?: string; purpose?: string }) {
+    const response = await this.client.post('/virtual-accounts', data);
+    return response.data;
+  }
+
+  async freezeVirtualAccount(vaId: string) {
+    const response = await this.client.post(`/virtual-accounts/${vaId}/freeze`);
+    return response.data;
+  }
+
+  async closeVirtualAccount(vaId: string) {
+    const response = await this.client.delete(`/virtual-accounts/${vaId}`);
+    return response.data;
+  }
+
+  // ---- Escrow ----
+  async getEscrows() {
+    const response = await this.client.get('/escrow/');
+    return response.data;
+  }
+
+  async createEscrow(data: { title: string; amount: number; counterparty?: string }) {
+    const response = await this.client.post('/escrow/', data);
+    return response.data;
+  }
+
+  async createMultipartyEscrow(data: {
+    title: string; total_amount: number;
+    buyers: any[]; sellers: any[];
+    approval_config?: any; fee_percentage?: number; escrow_type?: string;
+  }) {
+    const response = await this.client.post('/escrow/multiparty', data);
+    return response.data;
+  }
+
+  async checkEscrowExpiry(escrowId: string) {
+    const response = await this.client.post(`/escrow/${escrowId}/check-expiry`);
+    return response.data;
+  }
+
+  async getPayees() {
+    const response = await this.client.get('/positive-pay/payees');
+    return response.data;
+  }
+
+  async registerPayee(data: {
+    payee_account: string; payee_name: string;
+    max_single_amount?: number; daily_limit?: number; category?: string;
+  }) {
+    const response = await this.client.post('/positive-pay/payees', data);
+    return response.data;
+  }
+
+  async suspendPayee(payeeId: string) {
+    const response = await this.client.delete(`/positive-pay/payees/${payeeId}`);
+    return response.data;
+  }
+
+  async getPaymentExceptions(status?: string) {
+    const response = await this.client.get('/positive-pay/exceptions', {
+      params: status ? { status } : {},
+    });
+    return response.data;
+  }
+
+  async decidePaymentException(exceptionId: string, decision: 'paid' | 'rejected', note?: string) {
+    const response = await this.client.post(
+      `/positive-pay/exceptions/${exceptionId}/decide`, { decision, note });
+    return response.data;
+  }
+
+  async getBillingStatement(period?: string) {
+    const response = await this.client.get('/billing/statements/current', {
+      params: period ? { period } : {},
+    });
+    return response.data;
+  }
+
+  // Behavior intelligence
+  async getNextActions(limit = 4) {
+    const response = await this.client.get('/intelligence/next-actions', { params: { limit } });
+    return response.data;
+  }
+
+  async recordAction(actionType: string, context?: Record<string, unknown>) {
+    const response = await this.client.post('/intelligence/events', {
+      action_type: actionType, context });
+    return response.data;
+  }
+
+  async getDueSoon(withinDays = 3) {
+    const response = await this.client.get('/intelligence/recurring/due-soon', {
+      params: { within_days: withinDays } });
+    return response.data;
+  }
+
+  async getRecurringPatterns() {
+    const response = await this.client.get('/intelligence/recurring');
+    return response.data;
+  }
+
+  async sendSuggestionFeedback(suggestionId: string, accepted: boolean) {
+    const response = await this.client.post(
+      `/intelligence/suggestions/${encodeURIComponent(suggestionId)}/feedback`, { accepted });
+    return response.data;
+  }
+
+  async getForecast(balance: number, days = 30) {
+    const response = await this.client.get('/intelligence/forecast', {
+      params: { balance, days } });
+    return response.data;
+  }
 }
 
 export default new ApiService();

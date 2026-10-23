@@ -98,6 +98,30 @@ const Sidebar = ({ open, onClose, darkMode }) => {
       current: location.pathname === '/escrow'
     },
     {
+      name: 'Virtual Accounts',
+      href: '/virtual-accounts',
+      icon: 'landmark',
+      current: location.pathname === '/virtual-accounts'
+    },
+    {
+      name: 'Credit Data',
+      href: '/credit-data',
+      icon: 'database',
+      current: location.pathname === '/credit-data'
+    },
+    {
+      name: 'Safe Payees',
+      href: '/positive-pay',
+      icon: 'shield-check',
+      current: location.pathname === '/positive-pay'
+    },
+    {
+      name: 'Smart For You',
+      href: '/intelligence',
+      icon: 'sparkles',
+      current: location.pathname === '/intelligence'
+    },
+    {
       name: 'Smart Money',
       href: '/innovations',
       icon: 'sparkles',

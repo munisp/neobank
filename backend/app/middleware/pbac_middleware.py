@@ -40,6 +40,9 @@ class ResourceType(str, Enum):
     USER = "user"
     ANALYTICS = "analytics"
     SYSTEM = "system"
+    VIRTUAL_ACCOUNT = "virtual_account"
+    CREDIT = "credit_assessment"
+    ALT_DATA = "alt_data_source"
     # Mojaloop interoperability
     MOJALOOP_PARTY = "mojaloop_party"
     MOJALOOP_QUOTE = "mojaloop_quote"
@@ -100,6 +103,91 @@ ROUTE_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     "POST /api/v1/kyb/initiate": {"resource": ResourceType.KYB, "action": Action.CREATE},
     "POST /api/v1/kyb/{id}/approve": {"resource": ResourceType.KYB, "action": Action.APPROVE},
     
+    # Virtual account routes
+    "GET /api/v1/virtual-accounts": {"resource": ResourceType.VIRTUAL_ACCOUNT, "action": Action.READ},
+    "POST /api/v1/virtual-accounts": {"resource": ResourceType.VIRTUAL_ACCOUNT, "action": Action.CREATE},
+    "POST /api/v1/virtual-accounts/{id}/freeze": {"resource": ResourceType.VIRTUAL_ACCOUNT, "action": Action.UPDATE},
+    "DELETE /api/v1/virtual-accounts/{id}": {"resource": ResourceType.VIRTUAL_ACCOUNT, "action": Action.DELETE},
+    "GET /api/v1/virtual-accounts/resolve/{id}": {"resource": ResourceType.VIRTUAL_ACCOUNT, "action": Action.READ},
+
+    # Credit routes
+    "GET /api/v1/credit/score": {"resource": ResourceType.CREDIT, "action": Action.READ},
+    "POST /api/v1/credit/assess": {"resource": ResourceType.CREDIT, "action": Action.APPLY},
+
+    # Alternative data routes
+    "GET /api/v1/alt-data/sources": {"resource": ResourceType.ALT_DATA, "action": Action.READ},
+    "POST /api/v1/alt-data/consent": {"resource": ResourceType.ALT_DATA, "action": Action.CREATE},
+    "DELETE /api/v1/alt-data/consent/{id}": {"resource": ResourceType.ALT_DATA, "action": Action.DELETE},
+    "POST /api/v1/alt-data/sms-alerts": {"resource": ResourceType.ALT_DATA, "action": Action.CREATE},
+    "POST /api/v1/alt-data/statements": {"resource": ResourceType.ALT_DATA, "action": Action.CREATE},
+    "POST /api/v1/alt-data/recurring-history": {"resource": ResourceType.ALT_DATA, "action": Action.CREATE},
+    "GET /api/v1/alt-data/summary": {"resource": ResourceType.ALT_DATA, "action": Action.READ},
+
+    # Positive pay routes
+    "GET /api/v1/positive-pay/payees": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "POST /api/v1/positive-pay/payees": {"resource": ResourceType.ACCOUNT, "action": Action.CREATE},
+    "DELETE /api/v1/positive-pay/payees/{id}": {"resource": ResourceType.ACCOUNT, "action": Action.DELETE},
+    "POST /api/v1/positive-pay/verify": {"resource": ResourceType.TRANSACTION, "action": Action.CREATE},
+    "GET /api/v1/positive-pay/exceptions": {"resource": ResourceType.TRANSACTION, "action": Action.READ},
+    "POST /api/v1/positive-pay/exceptions/{id}/decide": {"resource": ResourceType.TRANSACTION, "action": Action.APPROVE},
+
+    # Billing routes
+    "GET /api/v1/billing/schedule": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "POST /api/v1/billing/schedule": {"resource": ResourceType.ACCOUNT, "action": Action.APPROVE},
+    "GET /api/v1/billing/statements": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "GET /api/v1/billing/statements/current": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "POST /api/v1/billing/statements/finalize": {"resource": ResourceType.ACCOUNT, "action": Action.CREATE},
+
+    # Document intake routes
+    "POST /api/v1/documents/cheques/extract": {"resource": ResourceType.TRANSACTION, "action": Action.CREATE},
+    "POST /api/v1/documents/cheques/extract-batch": {"resource": ResourceType.TRANSACTION, "action": Action.CREATE},
+
+    # Intelligence routes (user-facing learned behaviors)
+    "POST /api/v1/intelligence/events": {"resource": ResourceType.TRANSACTION, "action": Action.CREATE},
+    "GET /api/v1/intelligence/next-actions": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "POST /api/v1/intelligence/recurring/scan": {"resource": ResourceType.TRANSACTION, "action": Action.READ},
+    "GET /api/v1/intelligence/recurring": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "GET /api/v1/intelligence/recurring/due-soon": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "POST /api/v1/intelligence/categories/learn": {"resource": ResourceType.TRANSACTION, "action": Action.CREATE},
+    "GET /api/v1/intelligence/categories/suggest": {"resource": ResourceType.TRANSACTION, "action": Action.READ},
+    "GET /api/v1/intelligence/forecast": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+    "POST /api/v1/intelligence/suggestions/{id}/feedback": {"resource": ResourceType.ACCOUNT, "action": Action.CREATE},
+    "GET /api/v1/intelligence/suggestions/stats": {"resource": ResourceType.ACCOUNT, "action": Action.READ},
+
+    # Ops intelligence routes (staff-only at router level too)
+    "POST /api/v1/ops/copilot/query": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "GET /api/v1/ops/copilot/history": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "POST /api/v1/ops/triage/rank": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "POST /api/v1/ops/triage/learn": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "GET /api/v1/ops/triage/stats": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "POST /api/v1/ops/reconciliation/run": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "GET /api/v1/ops/reconciliation/runs": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "GET /api/v1/ops/models": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "POST /api/v1/ops/models": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "POST /api/v1/ops/models/{name}/mode": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "GET /api/v1/ops/models/{name}/promotion": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+
+    # ACH NACHA routes (sidecar-backed)
+    "POST /api/v1/ach/nacha/validate": {"resource": ResourceType.TRANSACTION, "action": Action.READ},
+    "POST /api/v1/ach/nacha/parse": {"resource": ResourceType.TRANSACTION, "action": Action.READ},
+    "POST /api/v1/ach/returns/ingest": {"resource": ResourceType.TRANSACTION, "action": Action.APPROVE},
+
+    # Controls routes (admin-gated at the router level too)
+    "GET /api/v1/controls/audit/verify": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "POST /api/v1/controls/credit/replay": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "POST /api/v1/controls/credit/anomaly-probes": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "GET /api/v1/controls/plugins": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+
+    # Escrow multiparty routes
+    "POST /api/v1/escrow/multiparty": {"resource": ResourceType.ESCROW, "action": Action.CREATE},
+    "POST /api/v1/escrow/{id}/parties": {"resource": ResourceType.ESCROW, "action": Action.UPDATE},
+    "POST /api/v1/escrow/{id}/contributions": {"resource": ResourceType.ESCROW, "action": Action.TRANSFER},
+    "POST /api/v1/escrow/{id}/approvals": {"resource": ResourceType.ESCROW, "action": Action.APPROVE},
+    "POST /api/v1/escrow/{id}/distribute": {"resource": ResourceType.ESCROW, "action": Action.TRANSFER},
+    "POST /api/v1/escrow/{id}/check-expiry": {"resource": ResourceType.ESCROW, "action": Action.UPDATE},
+    "POST /api/v1/escrow/{id}/milestones/{id}/rules": {"resource": ResourceType.ESCROW, "action": Action.UPDATE},
+    "POST /api/v1/escrow/{id}/milestones/{id}/approvals": {"resource": ResourceType.ESCROW, "action": Action.APPROVE},
+
     # Loan routes
     "GET /api/v1/loans": {"resource": ResourceType.LOAN, "action": Action.READ},
     "GET /api/v1/loans/{id}": {"resource": ResourceType.LOAN, "action": Action.READ},

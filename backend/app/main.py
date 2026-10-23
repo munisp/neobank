@@ -319,6 +319,33 @@ def create_application() -> FastAPI:
     app.include_router(investment_router.alias_router, prefix="/api")
 
     # KYB proxy (lives alongside the KYC proxy in kyc_router)
+    from app.routers import credit_router
+    app.include_router(credit_router.router, prefix="/api/v1")
+    app.include_router(credit_router.router, prefix="/api")
+    from app.routers import alt_data_router
+    app.include_router(alt_data_router.router, prefix="/api/v1")
+    app.include_router(alt_data_router.router, prefix="/api")
+    from app.routers import virtual_account_router
+    app.include_router(virtual_account_router.router, prefix="/api/v1")
+    app.include_router(virtual_account_router.router, prefix="/api")
+    from app.routers import positive_pay_router
+    app.include_router(positive_pay_router.router, prefix="/api/v1")
+    app.include_router(positive_pay_router.router, prefix="/api")
+    from app.routers import trust_router
+    for _r in (trust_router.billing_router, trust_router.documents_router,
+               trust_router.controls_router):
+        app.include_router(_r, prefix="/api/v1")
+        app.include_router(_r, prefix="/api")
+    from app.routers import ach_router
+    app.include_router(ach_router.router, prefix="/api/v1")
+    app.include_router(ach_router.router, prefix="/api")
+
+    from app.routers import intelligence_router, ops_router
+    app.include_router(intelligence_router.router, prefix="/api/v1")
+    app.include_router(intelligence_router.router, prefix="/api")
+    app.include_router(ops_router.router, prefix="/api/v1")
+    app.include_router(ops_router.router, prefix="/api")
+
     app.include_router(kyc_router.kyb_router, prefix="/api/v1")
     app.include_router(kyc_router.kyb_router, prefix="/api")
 
