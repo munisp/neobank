@@ -310,6 +310,13 @@ class CreditDecisionService:
                 record_usage(str(user.id), "credit_assessment")
             except Exception:
                 pass
+            try:  # behavior event: feeds next-action prediction
+                from app.services.behavior_intelligence_service import behavior_intelligence_service
+                await behavior_intelligence_service.record_action(
+                    str(user.id), "credit_assessment_completed",
+                    {"product": product, "decision": decision["decision"]})
+            except Exception:
+                pass
             await feature_integration.publish_feature_event(
                 "CreditAssessmentCompleted",
                 aggregate_id=str(assessment_id),

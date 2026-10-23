@@ -67,6 +67,8 @@ async def lifespan(app: FastAPI):
         await initialize_permify_service()
         logger.info("Permify service initialized")
         initialize_monitoring(app)
+        from app.services.intelligence_bootstrap import bootstrap_intelligence
+        bootstrap_intelligence()
     except Exception as e:
         logger.error("Failed to initialize services", error=str(e))
         raise

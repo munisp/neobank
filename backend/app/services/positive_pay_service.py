@@ -190,6 +190,17 @@ class PositivePayService:
                      "risk_score": float(exc.risk_score or 0),
                      "agreed_with_model": exc.recommendation == (
                          "pay" if decision == "paid" else "reject")})
+        # Feed the labeled decision into the triage learner so the exception
+        # queue's risk ranking improves with every human call.
+        try:
+            from app.services.exception_triage_service import exception_triage_service
+            exception_triage_service.learn_from_decision(
+                {"reason": exc.reason, "amount": float(exc.amount or 0),
+                 "risk_score": float(exc.risk_score or 0)},
+                model_recommendation=exc.recommendation or "review",
+                human_decision="pay" if decision == "paid" else "reject")
+        except Exception as learn_exc:  # noqa: BLE001
+            logger.warning("triage.learn_failed", error=str(learn_exc))
         return self._serialize_exception(exc)
 
     @staticmethod

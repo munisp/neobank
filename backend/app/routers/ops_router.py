@@ -147,3 +147,26 @@ async def model_promotion(name: str, user: dict = Depends(get_current_user)):
         return model_registry.can_promote(name)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/intelligence/nightly-sweep")
+async def run_nightly_sweep(user: dict = Depends(get_current_user)):
+    """Manually trigger the nightly learning sweep (replay, probes, rebuild)."""
+    _require_staff(user)
+    from app.services.intelligence_jobs import intelligence_jobs
+    return await intelligence_jobs.run_nightly_sweep()
+
+
+@router.get("/intelligence/sweeps")
+async def list_sweeps(user: dict = Depends(get_current_user)):
+    _require_staff(user)
+    from app.services.intelligence_jobs import intelligence_jobs
+    return {"sweeps": intelligence_jobs.sweeps[-20:]}
+
+
+@router.post("/intelligence/schedule")
+async def schedule_sweep(user: dict = Depends(get_current_user)):
+    """Register the nightly sweep as a Temporal cron workflow."""
+    _require_staff(user)
+    from app.services.intelligence_jobs import schedule_nightly_sweep
+    return await schedule_nightly_sweep()

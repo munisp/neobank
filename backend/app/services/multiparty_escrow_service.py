@@ -426,6 +426,15 @@ class MultipartyEscrowService:
                 record_usage(str(primary.user_id), "escrow_deal")
         except Exception:
             pass
+        try:  # behavior event: feeds next-action prediction
+            from app.services.behavior_intelligence_service import behavior_intelligence_service
+            buyer = next((p for p in self.parties[escrow_id].values()
+                          if p.role == PartyRole.BUYER), None)
+            if buyer:
+                await behavior_intelligence_service.record_action(
+                    str(buyer.user_id), "escrow_created", {"escrow_id": escrow_id})
+        except Exception:
+            pass
 
         return {
             "escrow_id": escrow_id,

@@ -166,6 +166,9 @@ ROUTE_PERMISSIONS: Dict[str, Dict[str, Any]] = {
     "POST /api/v1/ops/models": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
     "POST /api/v1/ops/models/{name}/mode": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
     "GET /api/v1/ops/models/{name}/promotion": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "POST /api/v1/ops/intelligence/nightly-sweep": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
+    "GET /api/v1/ops/intelligence/sweeps": {"resource": ResourceType.SYSTEM, "action": Action.READ},
+    "POST /api/v1/ops/intelligence/schedule": {"resource": ResourceType.SYSTEM, "action": Action.APPROVE},
 
     # ACH NACHA routes (sidecar-backed)
     "POST /api/v1/ach/nacha/validate": {"resource": ResourceType.TRANSACTION, "action": Action.READ},
